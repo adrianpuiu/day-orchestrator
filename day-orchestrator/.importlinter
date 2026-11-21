@@ -1,0 +1,20 @@
+[importlinter]
+root_package = app
+
+[importlinter:contract:layers]
+name = Layered architecture (ADR-006): composition > workflows > tools > channels > core
+type = layers
+layers =
+    app.runtime
+    app.workflows
+    app.tools
+    app.channels
+    app.core
+
+[importlinter:contract:channels-independent]
+name = Channel adapters never import each other
+type = independence
+modules =
+    app.channels.gmail
+    app.channels.telegram
+    app.channels.calendar

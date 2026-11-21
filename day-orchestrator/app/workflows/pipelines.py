@@ -1,0 +1,162 @@
+"""Deterministic pipelines W1-W3 (architecture.md): glue agents have no LLM.
+
+Fresh pipeline instances per run (ADK agents bind to one parent).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from google.adk.agents import BaseAgent, SequentialAgent
+from google.adk.agents.invocation_context import InvocationContext
+from google.adk.events import Event
+
+from ..core import actionlog, budget, memory, tasks
+from ..core.config import Config
+from ..core.textfmt import escape_html, markdown_to_telegram_html
+from ..tools import ToolDeps, make_tools
+from . import agents as wf_agents
+
+log = logging.getLogger(__name__)
+
+
+def _as_json(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return value
+
+
+class LoadState(BaseAgent):
+    """Runs an async loader, writes the returned dict into session state."""
+
+    loader: Any = None  # async () -> dict[str, Any]
+
+    async def _run_async_impl(self, ctx: InvocationContext):
+        data = await self.loader()
+        for key, value in data.items():
+            ctx.session.state[key] = value
+        yield Event(author=self.name)
+
+
+class PushText(BaseAgent):
+    """Pipeline tail: push a state text to Telegram under the daily budget (C10)."""
+
+    deps: Any = None
+    cfg: Any = None
+    text_key: str = "brief_markdown"
+    category: str = "briefing"
+
+    async def _run_async_impl(self, ctx: InvocationContext):
+        text = ctx.session.state.get(self.text_key) or ""
+        if not str(text).strip():
+            actionlog.log(self.deps.db, "pipeline", "brief_empty", "system",
+                          detail={"category": self.category})
+            yield Event(author=self.name)
+            return
+        limit = self.cfg.budgets.get(self.category, 1)
+        if not budget.allow(self.deps.db, self.category, limit, self.cfg.timezone):
+            actionlog.log(self.deps.db, "pipeline", "notify_budget_blocked", "notify",
+                          detail={"category": self.category})
+            yield Event(author=self.name)
+            return
+        await self.deps.notifier.send(
+            markdown_to_telegram_html(str(text)), self.category
+        )
+        yield Event(author=self.name)
+
+
+class AlertHigh(BaseAgent):
+    """W2 tail: store triage results; push a digest of high-importance mail."""
+
+    deps: Any = None
+    cfg: Any = None
+
+    async def _run_async_impl(self, ctx: InvocationContext):
+        triage = _as_json(ctx.session.state.get("triage_json"))
+        memory.set_value(self.deps.db, "last_triage", triage)
+        items = triage.get("items", []) if isinstance(triage, dict) else []
+        high = [i for i in items if i.get("importance") == "high"]
+        if not high:
+            yield Event(author=self.name)
+            return
+        limit = self.cfg.budgets.get("triage_alerts", 5)
+        if not budget.allow(self.deps.db, "triage_alerts", limit, self.cfg.timezone):
+            actionlog.log(self.deps.db, "pipeline", "notify_budget_blocked", "notify",
+                          detail={"category": "triage_alerts"})
+            yield Event(author=self.name)
+            return
+        lines = ["<b>High-importance mail:</b>"]
+        for item in high[:5]:
+            summary = escape_html(str(item.get("summary", "")))
+            lines.append(f"• {summary}")
+        await self.deps.notifier.send("\n".join(lines), "triage_alerts")
+        yield Event(author=self.name)
+
+
+def briefing_loader(deps: ToolDeps, cfg: Config) -> Callable[[], Awaitable[dict[str, str]]]:
+    async def loader() -> dict[str, str]:
+        emails = await asyncio.to_thread(deps.gmail.fetch_recent, cfg.max_overnight_emails)
+        try:
+            events = await asyncio.to_thread(deps.calendar.get_events, 2)
+        except Exception:
+            log.warning("calendar unavailable; briefing degrades", exc_info=True)
+            events = []
+        return {
+            "overnight_emails": json.dumps(emails),
+            "calendar_events": json.dumps(events),
+            "open_tasks": json.dumps(tasks.list_open(deps.db)),
+        }
+
+    return loader
+
+
+def incoming_loader(emails: list[dict[str, Any]]) -> Callable[[], Awaitable[dict[str, str]]]:
+    async def loader() -> dict[str, str]:
+        return {"overnight_emails": json.dumps(emails)}
+
+    return loader
+
+
+def _tool_named(tools: list, name: str):
+    for tool in tools:
+        if tool.name == name:
+            return tool
+    raise LookupError(f"tool {name!r} not in toolset")
+
+
+def make_briefing_pipeline(deps: ToolDeps, cfg: Config) -> SequentialAgent:
+    """W1 Morning brief: fetch → triage → task extraction → plan → push."""
+    tools = make_tools(deps)
+    return SequentialAgent(
+        name="briefing_pipeline",
+        sub_agents=[
+            LoadState(name="load_briefing_inputs", loader=briefing_loader(deps, cfg)),
+            wf_agents.make_triage_agent(cfg.triage_model),
+            wf_agents.make_task_extractor(cfg.triage_model, _tool_named(tools, "add_task")),
+            wf_agents.make_planner_agent(cfg.planner_model),
+            PushText(name="push_briefing", deps=deps, cfg=cfg),
+        ],
+    )
+
+
+def make_incoming_pipeline(
+    deps: ToolDeps, cfg: Config, emails: list[dict[str, Any]]
+) -> SequentialAgent:
+    """W2 New-mail triage: triage → store + alert on high importance."""
+    return SequentialAgent(
+        name="incoming_pipeline",
+        sub_agents=[
+            LoadState(name="load_incoming", loader=incoming_loader(emails)),
+            wf_agents.make_triage_agent(cfg.triage_model),
+            AlertHigh(name="alert_high", deps=deps, cfg=cfg),
+        ],
+    )

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- Day Orchestrator keep-alive agent (ADR-006 ops wrapper).
+     Install:
+       cp ops/launchd/com.agp.day-orchestrator.plist ~/Library/LaunchAgents/
+       # edit the two /Users/agp paths if the repo moves
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agp.day-orchestrator.plist
+     Logs: ~/Library/Application Support/day-orchestrator/logs/
+-->
+<dict>
+    <key>Label</key>
+    <string>com.agp.day-orchestrator</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/agp/.local/bin/uv</string>
+        <string>run</string>
+        <string>--directory</string>
+        <string>/Users/agp/Desktop/google-adk/day-orchestrator</string>
+        <string>python</string>
+        <string>-m</string>
+        <string>app.cli</string>
+        <string>run</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/agp/Library/Application Support/day-orchestrator/logs/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/agp/Library/Application Support/day-orchestrator/logs/stderr.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONDONTWRITEBYTECODE</key>
+        <string>1</string>
+    </dict>
+</dict>
+</plist>
