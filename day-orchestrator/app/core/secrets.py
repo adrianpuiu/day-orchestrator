@@ -27,7 +27,7 @@ class KeychainBackend:
 
         try:
             return keyring.get_password(SERVICE, name)
-        except keyring.errors.KeyRingError:
+        except keyring.errors.KeyringError:  # incl. NoKeyringError (no backend)
             return None
 
     def set(self, name: str, value: str) -> None:
