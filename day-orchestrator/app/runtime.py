@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -159,12 +160,19 @@ class Runtime:
             self.secrets.require("GMAIL_APP_PASSWORD"),
         )
         token = self.secrets.get("TELEGRAM_BOT_TOKEN")
+        # One-time pairing code: the tail of the bot token, readable only on
+        # the owner's Mac (cli `pair`). First-/start no longer wins by itself.
+        self._pairing_code = token[-8:] if token else None
         self.telegram = telegram or (
             TelegramChannel(token, self.bus) if token else None
         )
         self.notifier = self.telegram or NullNotifier()
         if self.telegram is not None:
             self.telegram.set_owner_chat_id(memory.get_value(self.db, "paired_chat"))
+        # Per-chat serialization: Telegram updates arrive as concurrent
+        # tasks; commands and approval callbacks for one chat must not
+        # interleave (double-tap Approve, burst messages).
+        self._chat_locks: dict[int, asyncio.Lock] = {}
 
         self.deps = ToolDeps(
             db=self.db,
@@ -281,8 +289,8 @@ class Runtime:
                 self.loop, Event(GMAIL_NEW_MESSAGES, {"messages": emails})
             )
 
-    async def _send_approval_card(self, row: approval.Approval) -> int:
-        assert self.telegram is not None
+    def _render_card(self, row: approval.Approval) -> str:
+        """Owner-facing card text for an approval row (single renderer)."""
         p = row.payload
         if row.kind == "create_calendar_event":
             from .core.humanize import fmt_dt
@@ -297,7 +305,14 @@ class Runtime:
             invitees = p.get("invitees") or []
             location = str(p.get("location") or "")
             if notes:
-                summary += f"\n{escape_html(notes[:200])}"
+                if len(notes) > 200:
+                    summary += (
+                        f"\n{escape_html(notes[:200])}"
+                        f"\n(+{len(notes) - 200} more characters — "
+                        "the full notes are written to the event)"
+                    )
+                else:
+                    summary += f"\n{escape_html(notes)}"
             if location:
                 summary += f"\nWhere: {escape_html(location)}"
             if invitees:
@@ -305,6 +320,8 @@ class Runtime:
             alarm = int(p.get("alarm_minutes") or 0)
             if alarm:
                 summary += f"\nAlarm: {alarm} min before"
+            if p.get("recurrence"):
+                summary += f"\nRepeats: {escape_html(str(p['recurrence']))}"
         elif row.kind == "edit_calendar_event":
             from .core.humanize import fmt_dt
 
@@ -329,13 +346,26 @@ class Runtime:
                 f"{escape_html(fmt_dt(p.get('old_start', '')))}"
             )
         else:
+            body = str(p.get("body", ""))
+            if len(body) > 800:
+                shown = (
+                    escape_html(body[:800])
+                    + f"\n(+{len(body) - 800} more characters — "
+                      "the full text is what gets sent)"
+                )
+            else:
+                shown = escape_html(body)
             summary = (
                 "<b>Send this email?</b>\n"
                 f"To: {escape_html(str(p.get('to', '')))}\n"
                 f"Subject: {escape_html(str(p.get('subject', '')))}\n\n"
-                f"{escape_html(str(p.get('body', ''))[:800])}"
+                f"{shown}"
             )
-        return await self.telegram.send_approval_card(row.id, summary)
+        return summary
+
+    async def _send_approval_card(self, row: approval.Approval) -> int:
+        assert self.telegram is not None
+        return await self.telegram.send_approval_card(row.id, self._render_card(row))
 
     # ---------- pipelines ----------
 
@@ -418,7 +448,10 @@ class Runtime:
         if not items:
             return
         replied = self._replied_message_ids()
-        awaiting = [i for i in items if not self._is_replied(i, replied)]
+        awaiting = []
+        for i in items:
+            if not await self._is_replied(i, replied):
+                awaiting.append(i)
         if not awaiting:
             return
         limit = self.cfg.budgets.get("triage_alerts", 5)
@@ -445,10 +478,10 @@ class Runtime:
                 continue
         return out
 
-    def _is_replied(self, item: dict, replied: set[str]) -> bool:
+    async def _is_replied(self, item: dict, replied: set[str]) -> bool:
         uid = str(item.get("uid", ""))
         try:
-            msg = self.gmail.get_message(uid)
+            msg = await asyncio.to_thread(self.gmail.get_message, uid)
         except Exception:
             return False
         return str(msg.get("message_id", "")) in replied
@@ -473,29 +506,81 @@ class Runtime:
             return
         chat_id = event.payload["chat_id"]
         text = str(event.payload["text"]).strip()
+        async with self._lock_for(int(chat_id)):
+            await self._handle_command(int(chat_id), text)
 
+    def _lock_for(self, chat_id: int) -> asyncio.Lock:
+        lock = self._chat_locks.get(chat_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._chat_locks[chat_id] = lock
+        return lock
+
+    EDIT_TTL_SECONDS = 600
+
+    def _load_edit_pending(self, key: str) -> dict | None:
+        """Read the edit marker; expire it after EDIT_TTL_SECONDS."""
+        raw = memory.get_value(self.db, key)
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            if (
+                isinstance(data, dict)
+                and time.time() - float(data.get("ts", 0)) <= self.EDIT_TTL_SECONDS
+            ):
+                return data
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+        memory.set_value(self.db, key, None)  # expired: don't eat the next message
+        return None
+
+    async def _handle_command(self, chat_id: int, text: str) -> None:
         paired = memory.get_value(self.db, "paired_chat")
         if paired is None:
             if text.startswith("/start"):
-                memory.set_value(self.db, "paired_chat", chat_id)
-                self.telegram.set_owner_chat_id(chat_id)
-                await self.telegram.send_message(
-                    "Paired. This chat is now the owner channel.", "reminders"
-                )
+                parts = text.split(maxsplit=1)
+                code = parts[1].strip() if len(parts) > 1 else ""
+                if self._pairing_code and code == self._pairing_code:
+                    memory.set_value(self.db, "paired_chat", chat_id)
+                    self.telegram.set_owner_chat_id(chat_id)
+                    await self.telegram.send_message(
+                        "Paired. This chat is now the owner channel.", "reminders"
+                    )
+                else:
+                    await self.telegram.send_message(
+                        "Pairing requires a one-time code. On the Mac run: "
+                        "uv run python -m app.cli pair",
+                        "reminders",
+                    )
             return
         if chat_id != paired:
             log.warning("unpaired chat %s attempted command; ignored", chat_id)
             return
 
         edit_key = f"edit_pending:{chat_id}"
-        pending_edit = memory.get_value(self.db, edit_key)
+        pending_edit = self._load_edit_pending(edit_key)
         if pending_edit:
-            row = approval.get(self.db, str(pending_edit))
+            if text == "/cancel":
+                memory.set_value(self.db, edit_key, None)
+                await self.telegram.send_message("Edit cancelled.", "reminders")
+                return
+            row = approval.get(self.db, str(pending_edit["id"]))
             memory.set_value(self.db, edit_key, None)
             if row is not None and row.state == "pending":
                 payload = dict(row.payload)
                 payload["body"] = text
                 approval.update_payload(self.db, row.id, payload)
+                fresh = approval.get(self.db, row.id)
+                if fresh is not None and fresh.telegram_message_id:
+                    try:
+                        await self.telegram.refresh_approval_card(
+                            fresh.telegram_message_id,
+                            self._render_card(fresh),
+                            fresh.id,
+                        )
+                    except Exception:
+                        log.exception("failed to refresh approval card after edit")
                 await self.telegram.send_message(
                     "Draft updated — approve on the card.", "reminders"
                 )
@@ -526,12 +611,34 @@ class Runtime:
         approval_id = str(event.payload["approval_id"])
         verdict = str(event.payload["verdict"])
         chat_id = event.payload.get("chat_id")
+        paired = memory.get_value(self.db, "paired_chat")
+        if paired is not None and chat_id is not None and chat_id != paired:
+            log.warning("approval event from non-paired chat %s; dropped", chat_id)
+            return
+        async with self._lock_for(int(chat_id) if chat_id is not None else 0):
+            await self._handle_approval(approval_id, verdict, chat_id)
+
+    async def _handle_approval(
+        self, approval_id: str, verdict: str, chat_id
+    ) -> None:
         if verdict == "edit":
             row = approval.get(self.db, approval_id)
             if row is not None and row.state == "pending" and self.telegram:
-                memory.set_value(self.db, f"edit_pending:{chat_id}", approval_id)
+                if row.kind != "send_email":
+                    await self.telegram.send_message(
+                        "Only email drafts can be edited here — reject the "
+                        "card and ask for a new one instead.",
+                        "reminders",
+                    )
+                    return
+                memory.set_value(
+                    self.db,
+                    f"edit_pending:{chat_id}",
+                    json.dumps({"id": approval_id, "ts": time.time()}),
+                )
                 await self.telegram.send_message(
-                    "Reply with the corrected email body.", "reminders"
+                    "Reply with the corrected email body (or /cancel).",
+                    "reminders",
                 )
             return
         mapped = {"approved": "approved", "rejected": "rejected"}.get(verdict)
@@ -549,14 +656,37 @@ class Runtime:
             log.warning("approval resolve failed: %s", exc)
             return
         confirmed = mapped == "approved"
-        resumed = await self.resume_for_approval(row, confirmed)
+        try:
+            resumed = await self.resume_for_approval(row, confirmed)
+        except Exception:
+            log.exception("resume failed for approval %s", row.id)
+            actionlog.log(
+                self.db, "gate", "send_failed", "send", approval_id=row.id,
+                detail={"stage": "resume"},
+            )
+            if self.telegram is not None:
+                try:
+                    await self.telegram.send_message(
+                        f"❌ Approved action ({escape_html(row.kind)}) could not "
+                        "run — resuming the agent failed. It will NOT be "
+                        "retried automatically; ask again if still needed.",
+                        "triage_alerts",
+                    )
+                except Exception:
+                    log.exception("resume-failure notify also failed")
+            resumed = False
         if self.telegram is not None and row.telegram_message_id:
             state = "approved — sending" if confirmed else "rejected"
-            note = "" if resumed else "\n(paused run not found; nothing was sent)"
+            if not resumed:
+                state += (
+                    " — FAILED to resume; nothing was sent"
+                    if confirmed
+                    else "\n(paused run not found; nothing was sent)"
+                )
             try:
                 await self.telegram.edit_message_text(
                     row.telegram_message_id,
-                    f"{escape_html(str(row.payload.get('subject', '')))}\n[{state}{note}]",
+                    f"{self._render_card(row)}\n[{state}]",
                     reply_markup=None,
                 )
             except Exception:

@@ -141,7 +141,7 @@ async def test_callback_query_publishes_approval_event(
 ) -> None:
     seen = await collect(bus, TELEGRAM_APPROVAL)
     callback = FakeCallback(
-        "appr:abc-1:approved", FakeMessage(message_id=55, chat_id=123)
+        "appr:abc-1:approved", FakeMessage(message_id=55, chat_id=42)
     )
     await channel._router.callback_query.trigger(callback)  # type: ignore[arg-type]
     assert len(seen) == 1
@@ -149,7 +149,7 @@ async def test_callback_query_publishes_approval_event(
         "approval_id": "abc-1",
         "verdict": "approved",
         "message_id": 55,
-        "chat_id": 123,
+        "chat_id": 42,
     }
 
 
@@ -158,9 +158,19 @@ async def test_all_verdicts_published(
     bus: EventBus, channel: TelegramChannel, verdict: str
 ) -> None:
     seen = await collect(bus, TELEGRAM_APPROVAL)
-    callback = FakeCallback(f"appr:id:{verdict}", FakeMessage(9, 1))
+    callback = FakeCallback(f"appr:id:{verdict}", FakeMessage(9, 42))
     await channel._router.callback_query.trigger(callback)  # type: ignore[arg-type]
     assert seen[0].payload["verdict"] == verdict
+
+
+async def test_callback_from_non_paired_chat_dropped(
+    bus: EventBus, channel: TelegramChannel
+) -> None:
+    """Security: approval buttons only work from the paired owner chat."""
+    seen = await collect(bus, TELEGRAM_APPROVAL)
+    callback = FakeCallback("appr:abc-1:approved", FakeMessage(9, 999))
+    await channel._router.callback_query.trigger(callback)  # type: ignore[arg-type]
+    assert seen == []
 
 
 async def test_unrelated_callback_answered_but_not_published(

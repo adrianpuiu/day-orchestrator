@@ -46,6 +46,10 @@ class EffectScheduler:
         self._bus = bus
         self._tz = local_tzinfo(timezone_cfg)
         self._sched = AsyncIOScheduler(timezone=self._tz)
+        # kind -> HH:MM list registered via ensure_daily; the midnight re-arm
+        # job replays them so a long-lived process keeps scheduling future
+        # days (launchd KeepAlive runs us for weeks, not one day).
+        self._daily_specs: dict[str, list[str]] = {}
 
     async def start(self) -> None:
         self._sched.start(paused=False)
@@ -61,9 +65,25 @@ class EffectScheduler:
             coalesce=True,
             misfire_grace_time=60,
         )
+        # Re-arm tomorrow's date-scoped jobs at local midnight: ensure_daily
+        # jobs are one-shot for *today* only; without this the scheduler is
+        # empty from day 2 of uptime onward (briefs and sweeps die silently).
+        self._sched.add_job(
+            self._rearm_daily,
+            "cron",
+            hour=0,
+            minute=0,
+            id="rearm_daily",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=GRACE_SECONDS,
+        )
 
     def ensure_daily(self, kind: str, at_hm: str, now: datetime | None = None) -> None:
         """Idempotently schedule today's run at HH:MM local. Date-scoped job id."""
+        if at_hm not in self._daily_specs.setdefault(kind, []):
+            self._daily_specs[kind].append(at_hm)
         now = now or datetime.now(self._tz)
         hour, minute = (int(p) for p in at_hm.split(":"))
         run_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -87,6 +107,13 @@ class EffectScheduler:
             log.error("no handler for scheduled effect %r", kind)
             return
         await handler(dedup_key)
+
+    async def _rearm_daily(self) -> None:
+        """Re-schedule every registered daily effect for the new local day."""
+        for kind, times in self._daily_specs.items():
+            for at_hm in times:
+                self.ensure_daily(kind, at_hm)
+        log.info("daily effects re-armed: %s", dict(self._daily_specs))
 
     async def _tick_reminders(self) -> None:
         # Caller passes db lazily via set_database(); kept optional for tests.

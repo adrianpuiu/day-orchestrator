@@ -8,6 +8,7 @@ Only this module may call `approval.require_resolved` (CI gate, ADR-006).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -89,7 +90,7 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             limit: Maximum number of emails to return (1-50).
         """
         limit = max(1, min(int(limit), 50))
-        msgs = deps.gmail.fetch_recent(limit)
+        msgs = await asyncio.to_thread(deps.gmail.fetch_recent, limit)
         return {"status": "success", "emails": msgs}
 
     @effect(Effect.READ)
@@ -99,7 +100,8 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         Args:
             uid: The email id as returned by list_recent_emails.
         """
-        return {"status": "success", **deps.gmail.get_message(uid)}
+        msg = await asyncio.to_thread(deps.gmail.get_message, uid)
+        return {"status": "success", **msg}
 
     @effect(Effect.READ)
     async def get_upcoming_events(days: int = 2) -> dict[str, Any]:
@@ -109,7 +111,9 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             days: How many days ahead to include (1-7).
         """
         try:
-            events = deps.calendar.get_events(max(1, min(days, 7)))
+            events = await asyncio.to_thread(
+                deps.calendar.get_events, max(1, min(days, 7))
+            )
         except Exception:
             log.exception("calendar unavailable; degrading brief")
             events = []
@@ -156,8 +160,9 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             uid: The email id being replied to.
             body: The reply body text.
         """
-        msg = deps.gmail.get_message(uid)
-        draft_id = deps.gmail.save_draft(
+        msg = await asyncio.to_thread(deps.gmail.get_message, uid)
+        draft_id = await asyncio.to_thread(
+            deps.gmail.save_draft,
             to=msg["from_"], subject="Re: " + msg["subject"], body=body,
             in_reply_to=msg.get("message_id"),
         )
@@ -312,13 +317,15 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
 
         async def execute(row: approval.Approval) -> dict[str, Any]:
             final = dict(row.payload)
-            deps.gmail.send_email(
+            await asyncio.to_thread(
+                deps.gmail.send_email,
                 to=final["to"], subject=final["subject"], body=final["body"],
                 in_reply_to=final.get("in_reply_to"),
             )
             actionlog.log(
                 deps.db, "gate", "email_sent", "send", approval_id=row.id,
-                detail={"to": final["to"], "subject": final["subject"]},
+                detail={"to": final["to"], "subject": final["subject"],
+                        "in_reply_to": final.get("in_reply_to")},
             )
             return {"status": "sent", "approval_id": row.id}
 
@@ -340,6 +347,7 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         invitees: list[str] | None = None,
         alarm_minutes: int = 30,
         location: str | None = None,
+        recurrence: str | None = None,
     ) -> dict[str, Any]:
         """Creates an event in the owner's Apple Calendar (syncs to iPhone).
         REQUIRES owner approval via Telegram before writing.
@@ -355,15 +363,18 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             alarm_minutes: Alert N minutes before the start (default 30;
                 0 disables the alarm).
             location: Optional place name or address.
+            recurrence: Optional repeat rule: 'daily' or 'weekly:MO,TU,...'.
         """
 
         async def execute(row: approval.Approval) -> dict[str, Any]:
             final = dict(row.payload)
-            event_id = deps.calendar_writer.create_event(
+            event_id = await asyncio.to_thread(
+                deps.calendar_writer.create_event,
                 final["title"], final["start"], final["end"],
                 notes=final.get("notes") or "",
                 invitees=final.get("invitees") or None,
                 alarm_minutes=int(final.get("alarm_minutes") or 0),
+                recurrence=final.get("recurrence") or "",
                 location=final.get("location") or "",
                 lat=final.get("location_lat"),
                 lon=final.get("location_lon"),
@@ -378,14 +389,14 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             "title": title, "start": start, "end": end,
             "notes": notes, "invitees": invitees,
             "alarm_minutes": max(0, int(alarm_minutes)),
-            "location": location,
+            "location": location, "recurrence": recurrence,
         }
         # Best-effort geocode: canonical address + coordinates for the event
         # (travel-time aware on iPhone). Read-only, so it needs no approval;
         # on failure the owner-typed location is kept as-is.
         if location and hasattr(deps.calendar, "geocode"):
             try:
-                hits = deps.calendar.geocode(location)
+                hits = await asyncio.to_thread(deps.calendar.geocode, location)
                 if hits:
                     payload["location"] = hits[0]["address"]
                     payload["location_lat"] = hits[0]["lat"]
@@ -422,7 +433,8 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
 
         async def execute(row: approval.Approval) -> dict[str, Any]:
             final = dict(row.payload)
-            result = deps.calendar_writer.update_event(
+            result = await asyncio.to_thread(
+                deps.calendar_writer.update_event,
                 final["event_id"],
                 title=final.get("new_title"),
                 start=final.get("new_start"),
@@ -435,7 +447,7 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             return {"status": "updated", "title": result.get("title"),
                     "approval_id": row.id}
 
-        meta = deps.calendar.get_event_meta(event_id)
+        meta = await asyncio.to_thread(deps.calendar.get_event_meta, event_id)
         payload = {
             "event_id": event_id,
             "old_title": (meta or {}).get("title", event_id),
@@ -465,14 +477,16 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
 
         async def execute(row: approval.Approval) -> dict[str, Any]:
             final = dict(row.payload)
-            result = deps.calendar_writer.delete_event(final["event_id"])
+            result = await asyncio.to_thread(
+                deps.calendar_writer.delete_event, final["event_id"]
+            )
             actionlog.log(
                 deps.db, "gate", "calendar_event_deleted", "send", approval_id=row.id,
                 detail={**final, "title": result.get("title", "")},
             )
             return {"status": "deleted", "approval_id": row.id}
 
-        meta = deps.calendar.get_event_meta(event_id)
+        meta = await asyncio.to_thread(deps.calendar.get_event_meta, event_id)
         payload = {
             "event_id": event_id,
             "old_title": (meta or {}).get("title", event_id),

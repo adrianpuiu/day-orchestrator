@@ -121,11 +121,38 @@ def cmd_install() -> None:
 
     print(
         "\n== Done. Last step (interactive): ==\n"
-        "1. Send /start to your bot on Telegram to pair this chat.\n"
+        "1. Run `uv run python -m app.cli pair` for the one-time code,\n"
+        "   then send `/start <code>` to your bot on Telegram.\n"
         "2. Tomorrow " + str(cfg.brief_time) + " you get the first brief.\n"
         "Useful: `uv run python -m app.cli secrets` (list), "
         "`... auth-calendar` (re-consent), `... smoke` (offline proof)."
     )
+
+
+def cmd_pair() -> None:
+    """Print the one-time pairing code derived from the bot token."""
+    token = default_secrets(PROJECT_ROOT).get("TELEGRAM_BOT_TOKEN")
+    if not token:
+        raise SystemExit("TELEGRAM_BOT_TOKEN not set (app.cli set-secret first).")
+    print(
+        "On Telegram, send this to your bot:\n"
+        f"\n    /start {token[-8:]}\n"
+    )
+
+
+def cmd_reset_pairing() -> None:
+    """Forget the paired Telegram chat so a new /start <code> can pair."""
+    from .core import memory
+    from .core.config import Config as _Cfg
+    from .core.db import Database
+
+    cfg = _Cfg.load()
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(cfg.db_path)
+    db.init_schema()
+    memory.set_value(db, "paired_chat", None)
+    db.close()
+    print("pairing reset — send `/start <code>` from the new owner chat.")
 
 
 def main() -> None:
@@ -154,6 +181,8 @@ def main() -> None:
     )
     sub.add_parser("eval-nightly", help="run live agent evals; alert Telegram on failure")
     sub.add_parser("smoke", help="offline proof of the approval gate")
+    sub.add_parser("pair", help="print the one-time Telegram pairing code")
+    sub.add_parser("reset-pairing", help="forget the paired Telegram chat")
 
     args = parser.parse_args()
 
@@ -188,6 +217,10 @@ def main() -> None:
             )
             events = client.get_events(1)
             print(f"calendar OK: {len(events)} event(s) in the next day.")
+    elif args.cmd == "pair":
+        cmd_pair()
+    elif args.cmd == "reset-pairing":
+        cmd_reset_pairing()
     elif args.cmd == "run":
         import logging
 

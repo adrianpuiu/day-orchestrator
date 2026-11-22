@@ -70,7 +70,9 @@ uv run python -m app.cli install
 The installer walks through: dependencies → config (from `config.toml.example`,
 Gemini API by default) → secrets (Telegram token, Gmail app password — input
 hidden) → calendar consent (one macOS dialog) → the always-on launchd service.
-Then send `/start` to your bot on Telegram — done. Tomorrow's brief arrives at
+Then run `uv run python -m app.cli pair` and send `/start <code>` (the
+printed one-time code) to your bot on Telegram — done. Tomorrow's brief
+arrives at
 07:00; anything important emails push immediately.
 
 ## Layout
@@ -114,7 +116,7 @@ uv run python -m app.cli auth-calendar
 #    If briefs ever say "calendar unavailable": System Settings → Privacy &
 #    Security → Calendars → allow the python binary.
 
-# 4. Pair Telegram: run the app, send /start from your chat
+# 4. Pair Telegram: `uv run python -m app.cli pair`, then send /start <code>
 uv run python -m app.cli run
 
 # Always-on (survives sleep/restart, catch-up on wake):

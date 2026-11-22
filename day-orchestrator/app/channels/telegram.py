@@ -123,6 +123,18 @@ class TelegramChannel:
             match = _CALLBACK_RE.match(data)
             if match is None or callback.message is None:
                 return
+            # Authorization: once a chat is paired, approval buttons are
+            # honored from that chat only — anyone else pressing a card's
+            # buttons (group member, forwarded card) must not reach the gate.
+            if (
+                self._owner_chat_id is not None
+                and callback.message.chat.id != self._owner_chat_id
+            ):
+                log.warning(
+                    "approval callback from non-paired chat %s; dropped",
+                    callback.message.chat.id,
+                )
+                return
             await self._bus.publish(
                 Event(
                     TELEGRAM_APPROVAL,
@@ -201,9 +213,10 @@ class TelegramChannel:
             )
         return {"message_id": message.message_id, "chat_id": message.chat.id}
 
-    async def send_approval_card(self, approval_id: str, summary_text: str) -> int:
-        """Send an inline approval card with approve/reject/edit buttons."""
-        markup = InlineKeyboardMarkup(
+    @staticmethod
+    def _approval_markup(approval_id: str) -> InlineKeyboardMarkup:
+        """The standard approve/reject/edit keyboard for an approval card."""
+        return InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
@@ -218,13 +231,28 @@ class TelegramChannel:
                 ]
             ]
         )
+
+    async def send_approval_card(self, approval_id: str, summary_text: str) -> int:
+        """Send an inline approval card with approve/reject/edit buttons."""
         message = await self._bot.send_message(
             chat_id=self._target_chat_id(),
             text=summary_text,
             parse_mode="HTML",
-            reply_markup=markup,
+            reply_markup=self._approval_markup(approval_id),
         )
         return message.message_id
+
+    async def refresh_approval_card(
+        self, message_id: int, summary_text: str, approval_id: str
+    ) -> None:
+        """Re-render an approval card in place, keeping its live buttons."""
+        await self._bot.edit_message_text(
+            chat_id=self._target_chat_id(),
+            message_id=message_id,
+            text=summary_text,
+            parse_mode="HTML",
+            reply_markup=self._approval_markup(approval_id),
+        )
 
     async def edit_message_text(
         self,

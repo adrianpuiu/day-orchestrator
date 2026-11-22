@@ -97,12 +97,15 @@ class GmailClient:
     @staticmethod
     def _default_imap_factory() -> IMAPClient:
         """Create a TLS IMAPClient bound to Gmail's IMAP endpoint."""
-        return IMAPClient(IMAP_HOST, port=IMAP_PORT, ssl_context=ssl.create_default_context())
+        return IMAPClient(
+            IMAP_HOST, port=IMAP_PORT,
+            ssl_context=ssl.create_default_context(), timeout=60,
+        )
 
     @staticmethod
     def _default_smtp_factory() -> smtplib.SMTP:
         """Create an SMTP connection to Gmail's STARTTLS endpoint."""
-        return smtplib.SMTP(SMTP_HOST, SMTP_PORT)
+        return smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=60)
 
     # ------------------------------------------------------------------ plumbing
 
@@ -118,6 +121,19 @@ class GmailClient:
             client.select_folder("INBOX")
             self._imap = client
         return self._imap
+
+    def new_imap(self) -> IMAPClient:
+        """Fresh connected IMAP client, NOT cached; the caller owns it.
+
+        The IDLE watcher must never share the cached connection with
+        request-path reads: commands issued while a connection sits in
+        IDLE mode fail server-side (imapclient contract), so the watcher
+        keeps its own connection per cycle.
+        """
+        client = self._imap_factory()
+        client.login(self._address, self._password)
+        client.select_folder("INBOX")
+        return client
 
     def _imap_op(self, op: Callable[[IMAPClient], object]) -> object:
         """Run an IMAP operation with exactly one reconnect retry."""
@@ -330,24 +346,44 @@ class GmailWatcher:
         poll_seconds: int,
         *,
         idle_check_timeout: int = 1740,
+        max_batch: int = 20,
     ) -> None:
         self._client = client
         self._on_new_messages = on_new_messages
         self._poll_seconds = poll_seconds
         self._idle_check_timeout = idle_check_timeout
+        self._max_batch = max_batch
         self._seen: set[int] = set()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
-        """Start the daemon watcher thread."""
+        """Seed the seen-baseline, then start the daemon watcher thread."""
         if self._thread is not None and self._thread.is_alive():
             return
+        self._seed_baseline()
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._run, name="gmail-watcher", daemon=True
         )
         self._thread.start()
+
+    def _seed_baseline(self) -> None:
+        """Mark current INBOX uids seen so a fresh start doesn't replay history."""
+        try:
+            client = self._client.new_imap()
+            try:
+                uids = client.search(["ALL"])
+                if isinstance(uids, list):
+                    self._seen.update(uids)
+                log.info("watcher baseline: %d uid(s) marked seen", len(self._seen))
+            finally:
+                try:
+                    client.logout()
+                except Exception:
+                    log.debug("baseline logout failed", exc_info=True)
+        except Exception:
+            log.exception("watcher baseline seed failed; first poll may replay")
 
     def stop(self, timeout: float = 10.0) -> None:
         """Signal the watcher to stop and join its thread."""
@@ -357,27 +393,36 @@ class GmailWatcher:
             thread.join(timeout)
         self._thread = None
 
-    def poll_once(self) -> None:
+    def poll_once(self, client: IMAPClient | None = None) -> None:
         """Check INBOX for unseen UIDs and notify about new summaries.
 
-        Exposed for tests and as the fallback path; the IDLE loop calls this
-        on every idle_check timeout or poll-interval boundary.
+        Uses a dedicated connection when none is given (never the shared
+        request-path one) and caps the per-batch notify count so a large
+        backlog cannot flood the triage pipeline in one shot.
         """
-        uids = self._client._imap_op(lambda c: c.search(["ALL"]))
-        assert isinstance(uids, list)
-        new = [u for u in uids if u not in self._seen]
-        if not new:
-            return
-        fetch_data: dict = self._client._imap_op(
-            lambda c: c.fetch(new, ["RFC822"])
-        )
-        summaries = [
-            self._client._summary(uid, data)
-            for uid, data in fetch_data.items()
-        ]
-        self._seen.update(uid for uid, _ in fetch_data.items())
-        if summaries:
-            self._on_new_messages(summaries)
+        own = client is None
+        conn = client if client is not None else self._client.new_imap()
+        try:
+            uids = conn.search(["ALL"])
+            assert isinstance(uids, list)
+            new = sorted(u for u in uids if u not in self._seen)
+            if not new:
+                return
+            batch = new[-self._max_batch:]
+            fetch_data: dict = conn.fetch(batch, ["RFC822"])
+            summaries = [
+                self._client._summary(uid, data)
+                for uid, data in fetch_data.items()
+            ]
+            self._seen.update(new)
+            if summaries:
+                self._on_new_messages(summaries)
+        finally:
+            if own:
+                try:
+                    conn.logout()
+                except Exception:
+                    log.debug("poll logout failed", exc_info=True)
 
     # ------------------------------------------------------------------ loop
 
@@ -394,23 +439,31 @@ class GmailWatcher:
                 backoff = min(backoff * 2, 60.0)
 
     def _idle_cycle(self) -> None:
-        """One IDLE send/idle_check/poll-fallback cycle."""
-        client = self._client._imap_op(lambda c: c)
-        client.idle()
+        """One IDLE cycle on a dedicated, cycle-owned connection."""
+        client = self._client.new_imap()
         try:
-            deadline = time.monotonic() + self._poll_seconds
-            while not self._stop.is_set() and time.monotonic() < deadline:
-                remaining = min(
-                    self._idle_check_timeout, deadline - time.monotonic()
-                )
-                if remaining <= 0:
-                    break
-                responses = client.idle_check(timeout=remaining)
-                if responses:
-                    break
-            self.poll_once()
+            client.idle()
+            try:
+                deadline = time.monotonic() + self._poll_seconds
+                while not self._stop.is_set() and time.monotonic() < deadline:
+                    remaining = min(
+                        self._idle_check_timeout, deadline - time.monotonic()
+                    )
+                    if remaining <= 0:
+                        break
+                    responses = client.idle_check(timeout=remaining)
+                    if responses:
+                        break
+            finally:
+                try:
+                    client.idle_done()
+                except Exception:
+                    log.debug("idle_done failed", exc_info=True)
+            # Poll strictly AFTER idle_done: any command issued while the
+            # connection is in IDLE mode fails server-side.
+            self.poll_once(client)
         finally:
             try:
-                client.idle_done()
+                client.logout()
             except Exception:
-                log.debug("idle_done failed", exc_info=True)
+                log.debug("watcher logout failed", exc_info=True)
