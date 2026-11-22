@@ -23,3 +23,13 @@ def allow(db: Database, category: str, limit: int, tz: str = "local") -> bool:
         (day, category),
     )
     return True
+
+
+def refund(db: Database, category: str, tz: str = "local") -> None:
+    """Give back one budget slot when the push it was spent on failed."""
+    day = local_today(tz).isoformat()
+    db.execute(
+        "UPDATE notification_budget SET sent=sent-1 "
+        "WHERE day=? AND category=? AND sent>0",
+        (day, category),
+    )

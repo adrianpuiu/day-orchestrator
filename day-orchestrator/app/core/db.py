@@ -109,6 +109,13 @@ class Database:
         with self._lock:
             for stmt in SCHEMA:
                 self._conn.execute(stmt)
+            # Migrations (CREATE IF NOT EXISTS won't alter existing tables).
+            try:
+                self._conn.execute(
+                    "ALTER TABLE reminders ADD COLUMN retries INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass  # column already exists
             row = self._conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()

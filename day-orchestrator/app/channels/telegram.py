@@ -15,6 +15,7 @@ import re
 from typing import Any
 
 from aiogram import Bot, Dispatcher, Router
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -198,9 +199,22 @@ class TelegramChannel:
     ) -> dict[str, Any]:
         """Send a Telegram-HTML notification to the paired chat (NotifierProto).
 
-        Chunks at line boundaries under the 4096-char API cap; the keyboard, if
-        any, rides on the last chunk.
+        Chunks at line boundaries under the 4096-char API cap; the keyboard,
+        if any, rides on the last chunk. One retry on a transient failure
+        (rate limit honored, network blip gets 2s): a single 429 must not
+        cost the day's brief slot.
         """
+        try:
+            return await self._send_message_once(text, reply_markup)
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(min(exc.retry_after + 1, 30))
+        except TelegramNetworkError:
+            await asyncio.sleep(2)
+        return await self._send_message_once(text, reply_markup)
+
+    async def _send_message_once(
+        self, text: str, reply_markup: InlineKeyboardMarkup | None = None
+    ) -> dict[str, Any]:
         chunks = split_message(text)
         message = None
         for i, chunk in enumerate(chunks):

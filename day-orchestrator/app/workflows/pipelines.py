@@ -84,9 +84,13 @@ class PushText(BaseAgent):
                           detail={"category": self.category})
             yield Event(author=self.name)
             return
-        await self.deps.notifier.send(
-            markdown_to_telegram_html(str(text)), self.category
-        )
+        try:
+            await self.deps.notifier.send(
+                markdown_to_telegram_html(str(text)), self.category
+            )
+        except Exception:
+            budget.refund(self.deps.db, self.category, self.cfg.timezone)
+            raise
         yield Event(author=self.name)
 
 
@@ -132,7 +136,11 @@ class AlertHigh(BaseAgent):
         for item in high[:5]:
             summary = escape_html(str(item.get("summary", "")))
             lines.append(f"• {summary}")
-        await self.deps.notifier.send("\n".join(lines), "triage_alerts")
+        try:
+            await self.deps.notifier.send("\n".join(lines), "triage_alerts")
+        except Exception:
+            budget.refund(self.deps.db, "triage_alerts", self.cfg.timezone)
+            raise
         yield Event(author=self.name)
 
 

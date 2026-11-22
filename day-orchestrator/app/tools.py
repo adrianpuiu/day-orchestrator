@@ -209,9 +209,13 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         # The notifier sends Telegram HTML; convert the declared markdown and
         # escape everything else so LLM output can never inject markup or
         # raw links (prompt injection arrives via email bodies).
-        result = await deps.notifier.send(
-            markdown_to_telegram_html(text), category
-        )
+        try:
+            result = await deps.notifier.send(
+                markdown_to_telegram_html(text), category
+            )
+        except Exception:
+            budget.refund(deps.db, category, deps.timezone)
+            raise
         return {"status": "success", "message_id": result.get("message_id")}
 
     # ---- approval-gated effect path (ADR-004): email + calendar writes ----
@@ -279,9 +283,13 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             return {"status": "rejected", "approval_id": approval_id}
 
         # At-most-once latch: an approved row must never send twice, no matter
-        # how many times the run resumes.
+        # how many times the run resumes. Two-phase: a claim without an
+        # outcome row means the process died mid-effect — re-run it (owner
+        # decision; small duplicate window after transport success).
         if not actionlog.claim(deps.db, f"send:{approval_id}", "gate"):
-            return {"status": "already_sent", "approval_id": approval_id}
+            if actionlog.effect_completed(deps.db, approval_id):
+                return {"status": "already_sent", "approval_id": approval_id}
+            log.warning("approval %s: incomplete claim; re-running effect", approval_id)
 
         # The row's payload is authoritative: the owner may have edited the
         # draft while the run was paused (ADR-004 Edit).

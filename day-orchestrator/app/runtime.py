@@ -12,7 +12,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from google.adk.apps import App, ResumabilityConfig
@@ -193,7 +193,11 @@ class Runtime:
 
         self.scheduler = EffectScheduler(
             self.cfg.timezone,
-            handlers={"brief": self.run_briefing, "sweep": self.run_sweep},
+            handlers={
+                "brief": self.run_briefing,
+                "sweep": self.run_sweep,
+                "maintenance": self.run_maintenance,
+            },
             bus=self.bus,
         )
         self.scheduler.set_database(self.db)
@@ -231,6 +235,7 @@ class Runtime:
         self.scheduler.ensure_daily("brief", self.cfg.brief_time)
         for t in self.cfg.sweep_times:
             self.scheduler.ensure_daily("sweep", t)
+        self.scheduler.ensure_daily("maintenance", "03:30")
         await self.scheduler.start()
         if self.telegram is not None:
             await self.telegram.start()
@@ -479,7 +484,12 @@ class Runtime:
         lines = ["<b>Awaiting your reply:</b>"]
         for item in awaiting[:5]:
             lines.append(f"• {escape_html(str(item.get('summary', '')))}")
-        await self.notifier.send("\n".join(lines), "triage_alerts")
+        try:
+            await self.notifier.send("\n".join(lines), "triage_alerts")
+        except Exception:
+            budget.refund(self.db, "triage_alerts", self.cfg.timezone)
+            log.exception("sweep push failed; budget slot refunded")
+            return
         actionlog.log(self.db, "pipeline", "sweep_notified", "notify",
                       detail={"dedup_key": dedup_key, "count": len(awaiting)})
 
@@ -798,7 +808,45 @@ class Runtime:
         return pending if pending and pending not in responded else None
 
     async def on_reminder(self, event: Event) -> None:
+        rid = event.payload.get("id")
         text = escape_html(str(event.payload.get("text", "")))
-        await self.notifier.send(f"⏰ {text}", "reminders")
+        try:
+            await self.notifier.send(f"⏰ {text}", "reminders")
+        except Exception:
+            # Requeue: the scheduler claimed the row (status='fired') before
+            # delivery; a transient Telegram failure must not eat the reminder.
+            log.exception("reminder push failed; requeueing %s", rid)
+            cur = self.db.execute(
+                "UPDATE reminders SET status='scheduled', retries=retries+1 "
+                "WHERE id=? AND retries<3",
+                (rid,),
+            )
+            if cur.rowcount == 0:
+                self.db.execute(
+                    "UPDATE reminders SET status='dropped' WHERE id=?", (rid,)
+                )
+                log.error("reminder %s dropped after max retries", rid)
+            return
         actionlog.log(self.db, "scheduler", "reminder_fired", "notify",
-                      detail={"id": event.payload.get("id")})
+                      detail={"id": rid})
+
+    async def run_maintenance(self, dedup_key: str) -> None:
+        """Daily prune (owner decision, 2026-11-23): incoming-% sessions older
+        than 30 days, stale triage rows, old budget days. The audit log is
+        append-only and is never pruned."""
+        if not actionlog.claim(self.db, dedup_key, "scheduler"):
+            return
+        old = self.db.query(
+            "SELECT id FROM sessions WHERE id LIKE 'incoming-%' "
+            "AND update_time < datetime('now', '-30 day')"
+        )
+        for row in old:
+            self.db.execute("DELETE FROM events WHERE session_id=?", (row["id"],))
+            self.db.execute("DELETE FROM sessions WHERE id=?", (row["id"],))
+        cutoff = (datetime.now(UTC) - timedelta(days=30)).isoformat(timespec="seconds")
+        self.db.execute("DELETE FROM email_triage WHERE created_at < ?", (cutoff,))
+        self.db.execute(
+            "DELETE FROM notification_budget WHERE day < date('now', '-30 day')"
+        )
+        actionlog.log(self.db, "scheduler", "maintenance_pruned", "system",
+                      detail={"sessions": len(old)})
