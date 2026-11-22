@@ -254,6 +254,12 @@ class Runtime:
                 f"{escape_html(str(p.get('start', '')))} → "
                 f"{escape_html(str(p.get('end', '')))}"
             )
+            notes = str(p.get("notes") or "")
+            invitees = p.get("invitees") or []
+            if notes:
+                summary += f"\n{escape_html(notes[:200])}"
+            if invitees:
+                summary += f"\nAttendees: {escape_html(', '.join(map(str, invitees)))}"
         else:
             summary = (
                 "<b>Send this email?</b>\n"

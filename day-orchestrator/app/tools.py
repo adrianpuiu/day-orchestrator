@@ -336,6 +336,8 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         title: str,
         start: str,
         end: str,
+        notes: str | None = None,
+        invitees: list[str] | None = None,
     ) -> dict[str, Any]:
         """Creates an event in the owner's Apple Calendar (syncs to iPhone).
         REQUIRES owner approval via Telegram before writing.
@@ -344,12 +346,18 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             title: Event title.
             start: ISO datetime, e.g. 2026-11-23T10:30.
             end: ISO datetime for the event end.
+            notes: Optional description text.
+            invitees: Optional email list; recorded in the notes (EventKit has
+                no public attendee API). To send real invitations, also call
+                send_email to each invitee after this is approved.
         """
 
         async def execute(row: approval.Approval) -> dict[str, Any]:
             final = dict(row.payload)
             event_id = deps.calendar_writer.create_event(
                 final["title"], final["start"], final["end"],
+                notes=final.get("notes") or "",
+                invitees=final.get("invitees") or None,
             )
             actionlog.log(
                 deps.db, "gate", "calendar_event_created", "send", approval_id=row.id,
@@ -357,10 +365,14 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             )
             return {"status": "created", "event_id": event_id, "approval_id": row.id}
 
-        payload = {"title": title, "start": start, "end": end}
+        payload = {
+            "title": title, "start": start, "end": end,
+            "notes": notes, "invitees": invitees,
+        }
+        summary = title + (f" — {notes[:80]}" if notes else "")
         return await _gated(
             tool_context, "create_calendar_event", payload,
-            hint=f"Create calendar event {title!r}?",
+            hint=f"Create calendar event {summary!r}?",
             execute=execute,
         )
 

@@ -43,4 +43,7 @@ and takes 4 args in pyobjc) — caught live, fixed.
 Read-only became read-write (same day): `create_event` writes to the default
 calendar — exposed to the coordinator as `add_calendar_event`, a **send-class
 effect behind the same approval gate** (nothing is written without an Approve
-tap; evolution step 4 delivered early for local writes).
+tap; evolution step 4 delivered early for local writes). Notes are supported
+(`setDescription_`); **real attendees are not** — EventKit has no public API
+to construct `EKParticipant` objects, so invitees land in the event notes
+("Attendees: …") and real invitations go through the gated `send_email`.

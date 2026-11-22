@@ -114,8 +114,10 @@ class FakeCalendar:
         self.fetched.append(days)
         return []
 
-    def create_event(self, title: str, start: str, end: str) -> str:
-        self.events.append({"title": title, "start": start, "end": end})
+    def create_event(self, title: str, start: str, end: str,
+                     notes: str = "", invitees: list[str] | None = None) -> str:
+        self.events.append({"title": title, "start": start, "end": end,
+                            "notes": notes, "invitees": invitees or []})
         return f"ek-{len(self.events)}"
 
 

@@ -56,11 +56,25 @@ class AppleCalendarClient:
         log.info("calendar: %d event(s) in the next %d day(s)", len(events), days)
         return events
 
-    def create_event(self, title: str, start_iso: str, end_iso: str) -> str:
-        """Write: create an event in the default calendar; returns its id."""
-        data = self._run(
-            ["create-event", "--title", title, "--start", start_iso, "--end", end_iso]
-        )
+    def create_event(
+        self,
+        title: str,
+        start_iso: str,
+        end_iso: str,
+        notes: str = "",
+        invitees: list[str] | None = None,
+    ) -> str:
+        """Write: create an event in the default calendar; returns its id.
+
+        Invitees land in the notes (EventKit has no public attendee API);
+        real invitations go through the gated send_email tool.
+        """
+        args = ["create-event", "--title", title, "--start", start_iso, "--end", end_iso]
+        if notes:
+            args += ["--notes", notes]
+        if invitees:
+            args += ["--invitees", ",".join(invitees)]
+        data = self._run(args)
         return str(data["event_id"])
 
     def access_status(self) -> int:

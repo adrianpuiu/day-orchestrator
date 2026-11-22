@@ -41,12 +41,29 @@ def test_create_event_returns_helper_id() -> None:
 
     client = AppleCalendarClient(runner=runner)
     event_id = client.create_event(
-        "Plată factură curent", "2026-11-23T10:30", "2026-11-23T11:00"
+        "Cafea cu Diana", "2026-11-23T17:30", "2026-11-23T18:30",
+        notes="prima cafea", invitees=["diana@example.com"],
     )
 
     assert event_id == "ek-123"
     assert calls == [[
-        "create-event", "--title", "Plată factură curent",
+        "create-event", "--title", "Cafea cu Diana",
+        "--start", "2026-11-23T17:30", "--end", "2026-11-23T18:30",
+        "--notes", "prima cafea",
+        "--invitees", "diana@example.com",
+    ]]
+
+
+def test_create_event_omits_empty_extras() -> None:
+    captured: list[list[str]] = []
+
+    client = AppleCalendarClient(
+        runner=lambda args: (captured.append(args), {"event_id": "ek-1"})[1]
+    )
+    client.create_event("x", "2026-11-23T10:30", "2026-11-23T11:00")
+
+    assert captured == [[
+        "create-event", "--title", "x",
         "--start", "2026-11-23T10:30", "--end", "2026-11-23T11:00",
     ]]
 

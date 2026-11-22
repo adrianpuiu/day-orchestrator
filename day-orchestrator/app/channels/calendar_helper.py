@@ -32,6 +32,12 @@ def main() -> None:
     p_create.add_argument("--title", required=True)
     p_create.add_argument("--start", required=True)
     p_create.add_argument("--end", required=True)
+    p_create.add_argument("--notes", default="")
+    p_create.add_argument(
+        "--invitees", default="",
+        help="comma-separated emails; recorded in the event notes (EventKit "
+             "has no public API for real attendees)",
+    )
     sub.add_parser("status")
     args = parser.parse_args()
 
@@ -114,6 +120,15 @@ def main() -> None:
         _die("no writable calendar found", 2)
     event = EK.EKEvent.eventWithEventStore_(store)
     event.setTitle_(args.title)
+    notes = args.notes
+    invitees = [e.strip() for e in args.invitees.split(",") if e.strip()]
+    if invitees:
+        bad = [e for e in invitees if "@" not in e]
+        if bad:
+            _die(f"invalid invitee emails: {', '.join(bad)}", 1)
+        notes = (notes + "\n\n" if notes else "") + "Attendees: " + ", ".join(invitees)
+    if notes:
+        event.setNotes_(notes)
     event.setStartDate_(
         EK_NSDATE_from(datetime.fromisoformat(args.start).astimezone())
     )
