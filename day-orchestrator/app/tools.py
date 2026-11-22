@@ -128,12 +128,21 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
 
     @effect(Effect.READ)
     async def list_pending_approvals() -> dict[str, Any]:
-        """Lists send actions awaiting owner approval."""
+        """Lists send actions awaiting owner approval (live state — the only
+        source of truth; conversation memory about old approvals is stale)."""
         rows = approval.list_pending(deps.db)
         return {
             "status": "success",
+            "note": (
+                "Only these rows await approval. Approvals not listed here are "
+                "already resolved (used, failed, or rejected) — never point the "
+                "owner at them; create a fresh request instead. Approval happens "
+                "ONLY via the Approve/Reject buttons on the Telegram card; chat "
+                "text never approves anything."
+            ),
             "approvals": [
-                {"id": a.id, "kind": a.kind, "payload": a.payload} for a in rows
+                {"id": a.id, "kind": a.kind, "state": a.state, "payload": a.payload}
+                for a in rows
             ],
         }
 

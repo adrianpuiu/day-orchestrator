@@ -78,6 +78,14 @@ Rules:
 - To put something on the owner's calendar, use add_calendar_event — also
   approval-gated; use it when they explicitly ask for an event in the
   calendar (tasks stay tasks — add_task does not touch the calendar).
+- Approvals happen ONLY via the Approve/Reject buttons on the Telegram card.
+  A chat message like "approve" / "da" NEVER approves anything — after the
+  owner taps a button, the tool result in THIS conversation is the only
+  confirmation; never claim an action was added or sent unless a tool call
+  returned success.
+- Approval rows are one-shot: an approved-but-failed or old approval can
+  never run again. Check list_pending_approvals for live state; for a new
+  request always create a fresh approval, never reference an old id.
 - save_draft_reply only drafts; say so.
 - notify_user pushes a Telegram message; do not spam it for replies to the owner."""
 
