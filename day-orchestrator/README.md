@@ -68,10 +68,14 @@ engine for the coordinator and task extraction.
 ## Verify
 
 ```bash
-uv run pytest -q            # 41 tests: gate, bus, stores, adapters (fakes), gate E2E
+uv run pytest -q            # 43 tests: gate, bus, stores, adapters (fakes), gate E2E
 uv run lint-imports         # layer + channel-independence contracts (ADR-006)
 uv run ruff check .
 uv run python -m app.smoke  # prints the offline approval-gate proof
+RUN_LIVE=1 uv run pytest tests/eval -q   # agent evals on the configured model:
+#   triage judgment (OTP=low, invoice=urgent, meeting=needs_reply), brief
+#   structure (sections, carry-over format, no invented times), coordinator
+#   tool routing (task add via tool, email always pauses behind the gate)
 ```
 
 ## Trust boundary
