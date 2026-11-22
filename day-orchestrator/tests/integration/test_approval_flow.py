@@ -75,7 +75,7 @@ async def test_approval_gate_geocodes_location(tmp_path: Path) -> None:
             "title": "Dentist",
             "start": "2026-11-24T14:00",
             "end": "2026-11-24T15:00",
-            "location": "Strada Bradului 57, Bacau",
+            "location": "Strada Exemplu 10, București",
         }),
     )
 

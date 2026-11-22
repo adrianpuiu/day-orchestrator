@@ -50,7 +50,7 @@ your iPhone, no OAuth, no cloud.
 |---|---|
 | Read (all calendars) | „ce am mâine?" |
 | Create with notes, location, alarm, recurrence | „pune sală luni și joi la 18:00, alarmă cu 30 min înainte" |
-| **Geocoded locations** | „dentist la Str. Bradului 57 Bacău" → Apple Maps validates the address and attaches coordinates (travel-time on iPhone) |
+| **Geocoded locations** | „dentist la Str. Exemplu 10, București" → Apple Maps validates the address and attaches coordinates (travel-time on iPhone) |
 | Move / rename / delete | „mută dentistul de joi" → proposes a conflict-free slot → card → Approve |
 | Writable target calendar | `calendar_target = "Home"` in config.toml |
 

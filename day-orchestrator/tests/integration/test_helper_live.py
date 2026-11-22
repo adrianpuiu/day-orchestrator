@@ -80,8 +80,8 @@ def test_create_with_alarm_structured_location_selfclean() -> None:
     start, end = _slot(4)
     out = _run(
         "create-event", "--title", "zz-runmac-probe", "--calendar", "Home",
-        "--location", "Strada Bradului 57, Bacau",
-        "--lat", "46.578327", "--lon", "26.902841",
+        "--location", "Strada Exemplu 10, București",
+        "--lat", "44.426765", "--lon", "26.102464",
         "--alarm-minutes", "30", "--start", start, "--end", end,
     )
     event_id = out["event_id"]
@@ -90,14 +90,14 @@ def test_create_with_alarm_structured_location_selfclean() -> None:
     assert ev is not None, "created event missing from the store"
     try:
         assert ev.title() == "zz-runmac-probe"
-        assert ev.location() == "Strada Bradului 57, Bacau"
+        assert ev.location() == "Strada Exemplu 10, București"
         structured = ev.structuredLocation()
         assert structured is not None and structured.title() == (
-            "Strada Bradului 57, Bacau"
+            "Strada Exemplu 10, București"
         )
         geo = structured.geoLocation()
         lat, lon = geo.coordinate()
-        assert abs(lat - 46.578327) < 1e-5 and abs(lon - 26.902841) < 1e-5
+        assert abs(lat - 44.426765) < 1e-5 and abs(lon - 26.102464) < 1e-5
         alarms = ev.alarms() or []
         assert any(a.relativeOffset() == -1800.0 for a in alarms), (
             "30-minute alarm missing"
