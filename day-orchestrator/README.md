@@ -66,23 +66,27 @@ uv run python -m app.cli auth-calendar
 uv run python -m app.cli run
 
 # Always-on (survives sleep/restart, catch-up on wake):
-cp ops/launchd/com.agp.day-orchestrator.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agp.day-orchestrator.plist
+# the installer generates + bootstraps the launchd plist with real paths;
+# it is idempotent - re-run it any time paths or config change.
+uv run python -m app.cli install
+launchctl kickstart -k gui/$(id -u)/com.agp.day-orchestrator
 ```
 
-Optional `config.toml` (project root) overrides defaults. Model serving: leave
+Optional `config.toml` (project root) overrides defaults — copy
+`config.toml.example` if you start without the installer. Model serving: leave
 `model_api_base` empty for Gemini model strings, or point it at any
-OpenAI-compatible server and use bare model ids (as `GET /v1/models` advertises):
+OpenAI-compatible server (e.g. a LAN inference box) and use bare model ids:
 
 ```toml
-model_api_base = "http://192.168.0.206:8000/v1"
+model_api_base = ""            # empty = Gemini; or e.g. "http://192.168.1.20:8000/v1"
 triage_model = "ds41"
 planner_model = "ds41"
 coordinator_model = "ds41"
 brief_time = "07:00"
+sweep_times = ["13:00", "18:00"]
 budgets = { briefing = 1, triage_alerts = 5, reminders = 20 }
 calendar_backend = "apple"     # "apple" (EventKit via bundle) | "google" (read-only)
-calendar_target = "Home"       # agent event writes land here ("" = macOS default)
+calendar_target = ""           # "" = macOS default-for-new-events calendar
 ```
 
 Structured output is instruction-driven JSON with tolerant parsing (no

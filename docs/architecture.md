@@ -174,12 +174,13 @@ flowchart LR
 - ADR-006 — Telegram long polling (no webhook) as the only user channel (amended: HTML + chunking, owner-chat ownership, typing, visible failures).
 - ADR-007 — Model serving: config-driven Gemini strings or local OpenAI-compatible endpoint via LiteLLM; instruction-driven JSON (no `response_format`); datetime injection; nightly drift evals.
 - ADR-008 — Credentials: git-ignored `.env` is canonical, Keychain fallback; no hardcoded credentials, ever.
+- ADR-009 — Calendar source: Apple EventKit inside `DayOrchestrator.app` (no OAuth; TCC attributed to the bundle). Addenda: gated writes (create/edit/delete, recurrence, alarms, notes, invitees-in-notes), geocoded structured locations, `calendar_target`.
+- ADR-010 — Persistent triage: `email_triage` table is the source of truth (first-seen wins); the follow-up sweep and the brief's awaiting-reply section consume it; `last_triage` memory retired.
 
 **Enforcement gates (CI)**:
-- `import-linter` layer contract: `adapters → tools → agents → events`; adapters must not import adapters; only `orchestrator` imports across modules via the event bus.
-- Grep gate: any `send`-effect tool must call `approval.require(...)` before transport; exactly one module may import `smtplib`.
-- Test rule: SMTP send is unreachable in tests without a fixture-approved approval row.
+- `import-linter` layer contract: `adapters → tools → agents → events`; channel adapters never import each other; only calendar adapters may import EventKit/Google API clients.
+- Gated tools (email + calendar effects) pause via ADK resumability and act only on `approval.require_resolved(...)` approved rows behind an at-most-once latch — proven by `tests/integration/test_approval_flow.py` and `tests/unit/test_send_path.py`.
 
 ## Non-goals
 
-Multi-user, horizontal scaling, calendar writes (until ADR'd), team/sharing features, multi-account Gmail (config-level future change, not architectural).
+Multi-user, horizontal scaling, team/sharing features, multi-account Gmail (config-level future change, not architectural).
