@@ -51,3 +51,14 @@ fires across restarts.
 Negative (accepted): missed effects older than the grace window are skipped by design —
 the morning brief for "yesterday" never fires at noon; the handler logs the skip to
 `action_log` so the gap is visible (observability +2).
+
+## Amendment (2026-11-23, as-built)
+
+Date-scoped daily jobs are re-armed twice: a local-midnight cron **and** a
+day-change check on the 60 s reminder tick — a Mac sleeping past the misfire
+grace would otherwise starve briefs and sweeps for that day. A third daily
+effect, `maintenance` at 03:30 (owner decision: prune30), deletes
+`incoming-%` sessions + events, stale `email_triage` rows and old
+`notification_budget` days older than 30 days. The action log is append-only
+and is never pruned. Failed reminder pushes requeue (retries < 3) before
+being dropped.

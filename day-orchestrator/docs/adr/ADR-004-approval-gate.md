@@ -60,3 +60,13 @@ Edit flow needs a small keyed conversation state in the Telegram adapter.
 - Approval cards render Telegram HTML (ADR-006 amendment); the session holding
   the paused run is stored on the approval row (`session_ref`) as
   `{user_id, session_id}` JSON for out-of-band resume.
+
+## Amendment (2026-11-23, owner decision: two-phase latch)
+
+The send latch is now two-phase. A `send:<approval_id>` claim **without** an
+outcome row (`email_sent` / `calendar_event_*`) means the process died
+mid-effect; on the next resume the effect is re-run instead of returning
+`already_sent`. Tradeoff accepted by the owner: a millisecond window exists
+between transport success and audit insert where a hard crash could duplicate
+the effect on recovery. The unreachable `superseded` state and its
+`supersede()` helper were removed in the same cleanup (2026-11-23).

@@ -58,3 +58,13 @@ budget (C10) already caps volume.
   imports, `approval.require_resolved` only in `app/tools.py`) plus the
   import-linter contracts; layer order as-built is
   `core ← channels ← tools ← workflows ← app`.
+
+## Amendment (2026-11-23, as-built)
+
+Pairing requires a one-time code: `/start <code>` where the code is the bot
+token's tail by default, rotated to a random value by `app.cli reset-pairing`
+(read live by the daemon on each `/start`). First-/start alone no longer
+pairs a chat; callbacks and approval events are dropped unless they come from
+the paired chat (fail-closed when no pairing exists). `send_message` retries
+once on rate-limit (honoring `retry_after`) and network errors; notification
+budget slots are refunded when a push fails.
