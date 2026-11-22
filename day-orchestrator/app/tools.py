@@ -223,6 +223,15 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
 
         if tool_context.tool_confirmation is None:
             # First execution: create the approval row and pause the run.
+            existing = approval.find_open_same(deps.db, kind, payload)
+            if existing is not None:
+                log.info("duplicate %s request; open approval %s already covers it",
+                         kind, existing.id)
+                return {
+                    "status": "duplicate",
+                    "approval_id": existing.id,
+                    "note": "an identical request already has an open approval card",
+                }
             ic = tool_context.get_invocation_context()
             session_ref = json.dumps({"user_id": ic.user_id, "session_id": ic.session.id})
             row = approval.create(deps.db, kind, payload,

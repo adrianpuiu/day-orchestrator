@@ -131,6 +131,33 @@ def list_pending(db: Database) -> list[Approval]:
     return [_row_to_approval(r) for r in rows]
 
 
+def find_open_same(db: Database, kind: str, payload: dict[str, Any]) -> Approval | None:
+    """An open approval with identical kind+payload: a pending twin, or an
+    approved row still inside the in-flight resume window (2 minutes).
+
+    Guards against the model emitting the same gated call twice in one turn —
+    approving both twins would double-apply the effect.
+    """
+    rows = db.query(
+        "SELECT * FROM approvals WHERE kind=? AND state IN ('pending','approved')"
+        " ORDER BY created_at DESC LIMIT 20",
+        (kind,),
+    )
+    now = datetime.now(UTC)
+    for row in rows:
+        try:
+            if json.loads(row["payload"]) != payload:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if row["state"] == "pending":
+            return _row_to_approval(row)
+        created = datetime.fromisoformat(row["created_at"])
+        if (now - created).total_seconds() < 120:
+            return _row_to_approval(row)
+    return None
+
+
 def attach_telegram_message(db: Database, approval_id: str, message_id: int) -> None:
     db.execute(
         "UPDATE approvals SET telegram_message_id=? WHERE id=?", (message_id, approval_id)
