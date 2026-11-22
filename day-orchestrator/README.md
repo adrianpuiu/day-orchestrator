@@ -40,6 +40,25 @@ Design rules that followed (full reasoning in
 - The gate is the product: pause → card → Approve/Reject/Edit → at-most-once
   apply → explicit ❌ on failure.
 
+## Calendar & Maps (Apple EventKit)
+
+The calendar adapter (ADR-009 + addenda) talks to Calendar.app through
+EventKit inside the `DayOrchestrator.app` bundle — the same events you see on
+your iPhone, no OAuth, no cloud.
+
+| Capability | Example on Telegram |
+|---|---|
+| Read (all calendars) | „ce am mâine?" |
+| Create with notes, location, alarm, recurrence | „pune sală luni și joi la 18:00, alarmă cu 30 min înainte" |
+| **Geocoded locations** | „dentist la Str. Bradului 57 Bacău" → Apple Maps validates the address and attaches coordinates (travel-time on iPhone) |
+| Move / rename / delete | „mută dentistul de joi" → proposes a conflict-free slot → card → Approve |
+| Writable target calendar | `calendar_target = "Home"` in config.toml |
+
+Everything is approval-gated and audited (`calendar_event_created` /
+`calendar_event_updated` / `calendar_event_deleted`). Implementation notes and
+the macOS TCC story live in
+[`docs/adr/ADR-009-calendar-source.md`](docs/adr/ADR-009-calendar-source.md).
+
 ## Install (macOS, ~5 minutes)
 
 ```bash
