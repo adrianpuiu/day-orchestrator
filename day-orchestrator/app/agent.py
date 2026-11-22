@@ -34,7 +34,7 @@ def _build_root_agent():
         budgets=cfg.budgets,
         timezone=cfg.timezone,
     )
-    return make_coordinator(cfg.coordinator_model, make_tools(deps))
+    return make_coordinator(cfg, make_tools(deps))
 
 
 root_agent = _build_root_agent()

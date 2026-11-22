@@ -87,6 +87,9 @@ class FakeTelegram:
     async def stop(self) -> None:
         pass
 
+    async def send(self, text: str, category: str, reply_markup=None) -> dict:
+        return await self.send_message(text, category, reply_markup)
+
     async def send_message(self, text: str, category: str, reply_markup=None) -> dict:
         self.messages.append(text)
         return {"message_id": len(self.messages), "chat_id": 42}

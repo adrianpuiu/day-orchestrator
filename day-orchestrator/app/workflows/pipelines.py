@@ -24,15 +24,30 @@ from . import agents as wf_agents
 log = logging.getLogger(__name__)
 
 
-def _as_json(value: Any) -> dict[str, Any]:
+def _extract_json(value: Any) -> dict[str, Any]:
+    """Tolerant parse of model text → JSON dict: strips fences, finds the object."""
     if value is None:
         return {}
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-    return value
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return {}
+    text = value.strip()
+    if "```" in text:  # drop markdown fences, keep the densest fenced block
+        blocks = [b.strip() for b in text.split("```")]
+        fenced = [b for b in blocks if b.startswith(("{", "[", "json"))]
+        if fenced:
+            text = min(fenced, key=len).removeprefix("json").strip()
+    for opener, closer in (("{", "}"), ("[", "]")):
+        start, end = text.find(opener), text.rfind(closer)
+        if start != -1 and end > start:
+            candidate = text[start : end + 1]
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            return parsed if isinstance(parsed, dict) else {"items": parsed}
+    return {}
 
 
 class LoadState(BaseAgent):
@@ -81,7 +96,7 @@ class AlertHigh(BaseAgent):
     cfg: Any = None
 
     async def _run_async_impl(self, ctx: InvocationContext):
-        triage = _as_json(ctx.session.state.get("triage_json"))
+        triage = _extract_json(ctx.session.state.get("triage_json"))
         memory.set_value(self.deps.db, "last_triage", triage)
         items = triage.get("items", []) if isinstance(triage, dict) else []
         high = [i for i in items if i.get("importance") == "high"]
@@ -140,9 +155,9 @@ def make_briefing_pipeline(deps: ToolDeps, cfg: Config) -> SequentialAgent:
         name="briefing_pipeline",
         sub_agents=[
             LoadState(name="load_briefing_inputs", loader=briefing_loader(deps, cfg)),
-            wf_agents.make_triage_agent(cfg.triage_model),
-            wf_agents.make_task_extractor(cfg.triage_model, _tool_named(tools, "add_task")),
-            wf_agents.make_planner_agent(cfg.planner_model),
+            wf_agents.make_triage_agent(cfg),
+            wf_agents.make_task_extractor(cfg, _tool_named(tools, "add_task")),
+            wf_agents.make_planner_agent(cfg),
             PushText(name="push_briefing", deps=deps, cfg=cfg),
         ],
     )
@@ -156,7 +171,7 @@ def make_incoming_pipeline(
         name="incoming_pipeline",
         sub_agents=[
             LoadState(name="load_incoming", loader=incoming_loader(emails)),
-            wf_agents.make_triage_agent(cfg.triage_model),
+            wf_agents.make_triage_agent(cfg),
             AlertHigh(name="alert_high", deps=deps, cfg=cfg),
         ],
     )

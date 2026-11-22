@@ -1,0 +1,12 @@
+# Live model: local OpenAI-compatible server on the LAN (evolution step 2).
+# Empty model_api_base would mean Gemini model strings instead.
+
+model_api_base = "http://192.168.0.206:8000/v1"
+
+# Bare model ids as advertised by GET /v1/models on that server.
+triage_model = "ds41"
+planner_model = "ds41"
+coordinator_model = "ds41"
+
+# Budgets/schedule defaults live in app/core/config.py; override here if needed.
+# brief_time = "07:00"

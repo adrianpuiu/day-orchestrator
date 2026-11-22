@@ -106,8 +106,10 @@ class Runtime:
         self.scheduler.set_database(self.db)
 
         tools = make_tools(self.deps)
-        self._coordinator_model = coordinator_model or self.cfg.coordinator_model
-        coordinator = make_coordinator(self._coordinator_model, tools)
+        # None → resolve from cfg (local OpenAI-compatible or Gemini per config);
+        # tests/smoke may inject an ADK model object (ScriptedLlm) instead.
+        self._coordinator_model = coordinator_model
+        coordinator = make_coordinator(self._coordinator_model or self.cfg, tools)
         self.coordinator_app = App(
             name=APP_NAME,
             root_agent=coordinator,

@@ -1,14 +1,17 @@
 """LLM step factories. Fresh instances per pipeline call (ADK parent binding).
 
-Model strings come from Config (ADR-003: affordability via flash-for-batch).
+Model resolution goes through core.models (Gemini strings or local
+OpenAI-compatible endpoint); flash-for-batch keeps affordability (ADR-003).
 """
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from google.adk.agents import Agent
-from pydantic import BaseModel, Field
+
+from ..core.config import Config
+from ..core.models import resolve_model
 
 TRIAGE_INSTRUCTION = """You triage emails for a busy owner.
 
@@ -20,7 +23,11 @@ For each email decide:
 - category: needs_reply | meeting | newsletter | fyi | task | other
 - summary: one sentence.
 
-Judge only from what is in the emails. Do not invent deadlines."""
+Judge only from what is in the emails. Do not invent deadlines.
+
+Output ONLY a JSON object, no prose, no markdown fences:
+{"items": [{"uid": "<uid>", "importance": "...", "category": "...", "summary": "..."}]}
+Empty input → {"items": []}"""
 
 BRIEF_INSTRUCTION = """Compose the owner's morning brief in concise Markdown (<=250 words).
 
@@ -59,50 +66,40 @@ Rules:
 - notify_user pushes a Telegram message; do not spam it for replies to the owner."""
 
 
-class TriageItem(BaseModel):
-    uid: str = Field(description="The email uid from the input")
-    importance: Literal["high", "normal", "low"]
-    category: Literal["needs_reply", "meeting", "newsletter", "fyi", "task", "other"]
-    summary: str = Field(description="One-sentence summary")
-
-
-class TriageResult(BaseModel):
-    items: list[TriageItem]
-
-
-def make_triage_agent(model: str) -> Agent:
+def make_triage_agent(cfg: Config) -> Agent:
     return Agent(
         name="triage_agent",
-        model=model,
+        model=resolve_model(cfg, cfg.triage_model),
         instruction=TRIAGE_INSTRUCTION,
-        output_schema=TriageResult,
         output_key="triage_json",
         include_contents="none",
         generate_content_config=None,
     )
 
 
-def make_planner_agent(model: str) -> Agent:
+def make_planner_agent(cfg: Config) -> Agent:
     return Agent(
         name="planner_agent",
-        model=model,
+        model=resolve_model(cfg, cfg.planner_model),
         instruction=BRIEF_INSTRUCTION,
         output_key="brief_markdown",
         include_contents="none",
     )
 
 
-def make_task_extractor(model: str, add_task_tool) -> Agent:
+def make_task_extractor(cfg: Config, add_task_tool) -> Agent:
     return Agent(
         name="task_extractor",
-        model=model,
+        model=resolve_model(cfg, cfg.triage_model),
         instruction=TASK_EXTRACT_INSTRUCTION,
         tools=[add_task_tool],
         include_contents="none",
     )
 
 
-def make_coordinator(model: Any, tools: list) -> Agent:
+def make_coordinator(cfg: Config | Any, tools: list) -> Agent:
+    """cfg is a Config (resolve from settings) or an already-built model override."""
+    model = resolve_model(cfg, cfg.coordinator_model) if isinstance(cfg, Config) else cfg
     return Agent(
         name="day_coordinator",
         model=model,

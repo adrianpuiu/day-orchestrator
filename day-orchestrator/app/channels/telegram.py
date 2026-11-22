@@ -119,6 +119,10 @@ class TelegramChannel:
         await self._bot.session.close()
         log.info("telegram polling stopped")
 
+    async def send(self, text: str, category: str) -> dict[str, Any]:
+        """NotifierProto entry (category unused here; budget enforced upstream)."""
+        return await self.send_message(text, category)
+
     async def send_message(
         self,
         text: str,

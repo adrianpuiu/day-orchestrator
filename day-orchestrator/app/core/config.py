@@ -28,6 +28,10 @@ class Config:
     triage_model: str = "gemini-3.8-flash"
     planner_model: str = "gemini-3.8-pro"
     coordinator_model: str = "gemini-3.8-flash"
+    # Empty → Gemini model strings as-is; set → OpenAI-compatible via LiteLLM
+    # (architecture.md evolution step 2), specs are bare model ids.
+    model_api_base: str = ""
+    model_api_key: str = "EMPTY"
     gmail_poll_seconds: int = 180  # IDLE fallback poll (ADR-002)
     max_overnight_emails: int = 50
     # C10 notification budget: max proactive pushes per category per day

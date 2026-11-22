@@ -48,8 +48,22 @@ cp ops/launchd/com.agp.day-orchestrator.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agp.day-orchestrator.plist
 ```
 
-Optional `config.toml` (project root) overrides defaults: `brief_time`,
-`sweep_times`, models, `gmail_poll_seconds`, `budgets` (notification caps), `timezone`.
+Optional `config.toml` (project root) overrides defaults. Model serving: leave
+`model_api_base` empty for Gemini model strings, or point it at any
+OpenAI-compatible server and use bare model ids (as `GET /v1/models` advertises):
+
+```toml
+model_api_base = "http://192.168.0.206:8000/v1"
+triage_model = "ds41"
+planner_model = "ds41"
+coordinator_model = "ds41"
+brief_time = "07:00"
+budgets = { briefing = 1, triage_alerts = 5, reminders = 20 }
+```
+
+Structured output is instruction-driven JSON with tolerant parsing (no
+`response_format`), so any engine works; tool calling must be supported by the
+engine for the coordinator and task extraction.
 
 ## Verify
 
