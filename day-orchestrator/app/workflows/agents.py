@@ -72,6 +72,8 @@ Resolve relative dates (today, tomorrow, tonight) against it — never guess.
 
 Rules:
 - Be concise; markdown.
+- Owner-facing date/time format is DD/MM/YYYY - HH:MM (e.g. 23/11/2026 - 14:30).
+  Use it whenever you write a date+time in replies; tools take ISO.
 - Use the read tools to answer questions about email, calendar, and tasks.
 - To send an email, use send_email — the owner approves in Telegram before it
   actually sends; tell them approval is pending.

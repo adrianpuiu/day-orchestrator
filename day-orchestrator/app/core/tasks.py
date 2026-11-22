@@ -64,18 +64,20 @@ def as_brief_lines(buckets: dict[str, list[dict[str, Any]]]) -> str:
     Unfinished overdue tasks fold into Today with a carried marker — Today is
     the single actionable list; the original due date stays visible.
     """
+    from .humanize import fmt_dt
+
     lines: list[str] = []
     for t in buckets.get("overdue", ()):
-        due = t.get("due") or ""
+        due = fmt_dt(t["due"]) if t.get("due") else ""
         carried = f" · carried from {due}" if due else " · overdue"
         suffix = f" — due {due}" if due else ""
         lines.append(f"- [today{carried}] {t['title']}{suffix}")
     for t in buckets.get("today", ()):
-        due = f" — due {t['due']}" if t.get("due") else ""
+        due = f" — due {fmt_dt(t['due'])}" if t.get("due") else ""
         lines.append(f"- [today] {t['title']}{due}")
     for name in ("tomorrow", "later", "someday"):
         for t in buckets.get(name, ()):
-            due = f" — due {t['due']}" if t.get("due") else ""
+            due = f" — due {fmt_dt(t['due'])}" if t.get("due") else ""
             lines.append(f"- [{name}] {t['title']}{due}")
     return "\n".join(lines) if lines else "No open tasks."
 

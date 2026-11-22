@@ -120,15 +120,12 @@ class AlertHigh(BaseAgent):
 
 def _format_events(events: list[dict[str, Any]]) -> str:
     """Renders calendar events as brief-ready markdown lines (local time)."""
-    from datetime import datetime
-
-    def _hm(iso: str) -> str:
-        return datetime.fromisoformat(str(iso)).astimezone().strftime("%H:%M")
+    from app.core.humanize import fmt_span
 
     lines: list[str] = []
     for event in events:
         try:
-            span = f"{_hm(event['start'])}–{_hm(event['end'])}"  # noqa: RUF001 — en dash reads better on iOS
+            span = fmt_span(event["start"], event["end"])
         except (KeyError, TypeError, ValueError):
             span = "all-day"
         line = f"- {span} {event.get('summary') or '(untitled)'}"

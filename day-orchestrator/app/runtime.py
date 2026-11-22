@@ -248,11 +248,13 @@ class Runtime:
         assert self.telegram is not None
         p = row.payload
         if row.kind == "create_calendar_event":
+            from .core.humanize import fmt_dt
+
             summary = (
                 "<b>Create this calendar event?</b>\n"
                 f"{escape_html(str(p.get('title', '')))}\n"
-                f"{escape_html(str(p.get('start', '')))} → "
-                f"{escape_html(str(p.get('end', '')))}"
+                f"{escape_html(fmt_dt(p.get('start', '')))} → "
+                f"{escape_html(fmt_dt(p.get('end', '')))}"
             )
             notes = str(p.get("notes") or "")
             invitees = p.get("invitees") or []
@@ -264,10 +266,12 @@ class Runtime:
             if alarm:
                 summary += f"\nAlarm: {alarm} min before"
         elif row.kind == "edit_calendar_event":
+            from .core.humanize import fmt_dt
+
             changes = ", ".join(
                 f"{k}: {escape_html(str(v))}"
-                for k, v in (("new start", p.get("new_start")),
-                             ("new end", p.get("new_end")),
+                for k, v in (("new start", fmt_dt(p["new_start"]) if p.get("new_start") else None),
+                             ("new end", fmt_dt(p["new_end"]) if p.get("new_end") else None),
                              ("new title", p.get("new_title")))
                 if v
             )
@@ -277,10 +281,12 @@ class Runtime:
                 f"change: {changes or 'nothing'}"
             )
         elif row.kind == "delete_calendar_event":
+            from .core.humanize import fmt_dt
+
             summary = (
                 "<b>Delete this calendar event?</b>\n"
                 f"{escape_html(str(p.get('old_title', '')))}\n"
-                f"{escape_html(str(p.get('old_start', '')))}"
+                f"{escape_html(fmt_dt(p.get('old_start', '')))}"
             )
         else:
             summary = (

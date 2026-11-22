@@ -54,9 +54,9 @@ def test_brief_lines_render_buckets_verbatim(tmp_path) -> None:
     tasks.add(db, "call dentist")
     lines = tasks.as_brief_lines(tasks.list_open_bucketed(db))
     assert lines == (
-        "- [today · carried from 2026-11-21] pay invoice — due 2026-11-21\n"
-        "- [today] call dentist — due 2026-11-22T14:00\n"
-        "- [later] renew hosting — due 2026-11-25\n"
+        "- [today · carried from 21/11/2026] pay invoice — due 21/11/2026\n"
+        "- [today] call dentist — due 22/11/2026 - 14:00\n"
+        "- [later] renew hosting — due 25/11/2026\n"
         "- [someday] call dentist"
     )
     empty = {"overdue": [], "today": [], "tomorrow": [], "later": [], "someday": []}
