@@ -354,14 +354,16 @@ class GmailWatcher:
         self._idle_check_timeout = idle_check_timeout
         self._max_batch = max_batch
         self._seen: set[int] = set()
+        # Set when the baseline seed failed: the first poll must then treat
+        # the whole inbox as a fresh baseline instead of replaying history.
+        self._baseline_pending = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
-        """Seed the seen-baseline, then start the daemon watcher thread."""
+        """Start the daemon watcher thread (baseline seeds inside it)."""
         if self._thread is not None and self._thread.is_alive():
             return
-        self._seed_baseline()
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._run, name="gmail-watcher", daemon=True
@@ -383,7 +385,8 @@ class GmailWatcher:
                 except Exception:
                     log.debug("baseline logout failed", exc_info=True)
         except Exception:
-            log.exception("watcher baseline seed failed; first poll may replay")
+            self._baseline_pending = True
+            log.exception("watcher baseline seed failed; first poll re-baselines")
 
     def stop(self, timeout: float = 10.0) -> None:
         """Signal the watcher to stop and join its thread."""
@@ -405,16 +408,22 @@ class GmailWatcher:
         try:
             uids = conn.search(["ALL"])
             assert isinstance(uids, list)
+            if self._baseline_pending:
+                # Seed failed earlier: treat current uids as the baseline.
+                self._seen.update(uids)
+                self._baseline_pending = False
             new = sorted(u for u in uids if u not in self._seen)
             if not new:
                 return
+            # Cap the batch; older unseen mail drains in later cycles
+            # (only the fetched batch is marked seen).
             batch = new[-self._max_batch:]
             fetch_data: dict = conn.fetch(batch, ["RFC822"])
             summaries = [
                 self._client._summary(uid, data)
                 for uid, data in fetch_data.items()
             ]
-            self._seen.update(new)
+            self._seen.update(batch)
             if summaries:
                 self._on_new_messages(summaries)
         finally:
@@ -427,7 +436,8 @@ class GmailWatcher:
     # ------------------------------------------------------------------ loop
 
     def _run(self) -> None:
-        """IDLE loop with poll fallback; never lets exceptions escape."""
+        """Baseline seed, then IDLE loop with poll fallback; never raises."""
+        self._seed_baseline()
         backoff = 1.0
         while not self._stop.is_set():
             try:

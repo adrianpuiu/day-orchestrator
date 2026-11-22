@@ -213,6 +213,15 @@ class TelegramChannel:
             )
         return {"message_id": message.message_id, "chat_id": message.chat.id}
 
+    async def reply_to(self, chat_id: int, text: str) -> None:
+        """Send plain text to an explicit chat, pairing not required.
+
+        Used for pre-pairing guidance (wrong /start code): send_message
+        resolves the destination via the paired owner chat, which raises
+        exactly while unpaired.
+        """
+        await self._bot.send_message(chat_id=chat_id, text=text)
+
     @staticmethod
     def _approval_markup(approval_id: str) -> InlineKeyboardMarkup:
         """The standard approve/reject/edit keyboard for an approval card."""

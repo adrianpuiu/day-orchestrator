@@ -130,18 +130,31 @@ def cmd_install() -> None:
 
 
 def cmd_pair() -> None:
-    """Print the one-time pairing code derived from the bot token."""
+    """Print the one-time pairing code (rotated by reset-pairing)."""
+
+    from .core import memory
+    from .core.config import Config as _Cfg
+    from .core.db import Database
+
+    cfg = _Cfg.load()
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(cfg.db_path)
+    db.init_schema()
+    override = memory.get_value(db, "pairing_code")
+    db.close()
     token = default_secrets(PROJECT_ROOT).get("TELEGRAM_BOT_TOKEN")
-    if not token:
+    code = override or (token[-8:] if token else None)
+    if not code:
         raise SystemExit("TELEGRAM_BOT_TOKEN not set (app.cli set-secret first).")
-    print(
-        "On Telegram, send this to your bot:\n"
-        f"\n    /start {token[-8:]}\n"
-    )
+    print("On Telegram, send this to your bot:\n")
+    print(f"    /start {code}")
 
 
 def cmd_reset_pairing() -> None:
-    """Forget the paired Telegram chat so a new /start <code> can pair."""
+    """Forget the paired chat and rotate the one-time pairing code."""
+    import secrets as _secrets
+    import string
+
     from .core import memory
     from .core.config import Config as _Cfg
     from .core.db import Database
@@ -151,8 +164,13 @@ def cmd_reset_pairing() -> None:
     db = Database(cfg.db_path)
     db.init_schema()
     memory.set_value(db, "paired_chat", None)
+    alphabet = string.ascii_uppercase + string.digits
+    code = "".join(_secrets.choice(alphabet) for _ in range(8))
+    memory.set_value(db, "pairing_code", code)
     db.close()
-    print("pairing reset — send `/start <code>` from the new owner chat.")
+    print("pairing reset and code rotated — new code:")
+    print(f"\n    /start {code}\n")
+    print("(the running daemon reads the rotated code on the next /start)")
 
 
 def main() -> None:

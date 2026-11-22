@@ -160,9 +160,11 @@ class Runtime:
             self.secrets.require("GMAIL_APP_PASSWORD"),
         )
         token = self.secrets.get("TELEGRAM_BOT_TOKEN")
-        # One-time pairing code: the tail of the bot token, readable only on
-        # the owner's Mac (cli `pair`). First-/start no longer wins by itself.
-        self._pairing_code = token[-8:] if token else None
+        # One-time pairing code: a rotated code stored by `app.cli
+        # reset-pairing`, else the tail of the bot token; readable only on
+        # the owner's Mac. First-/start alone no longer wins.
+        override = memory.get_value(self.db, "pairing_code")
+        self._pairing_code = override or (token[-8:] if token else None)
         self.telegram = telegram or (
             TelegramChannel(token, self.bus) if token else None
         )
@@ -504,10 +506,17 @@ class Runtime:
     async def on_command(self, event: Event) -> None:
         if self.telegram is None:
             return
-        chat_id = event.payload["chat_id"]
+        chat_id = int(event.payload["chat_id"])
         text = str(event.payload["text"]).strip()
-        async with self._lock_for(int(chat_id)):
-            await self._handle_command(int(chat_id), text)
+        paired = memory.get_value(self.db, "paired_chat")
+        if paired is None:
+            # Fail closed after a live `reset-pairing`: drop any stale
+            # in-memory owner the channel still holds.
+            self.telegram.set_owner_chat_id(None)
+        elif chat_id != paired:
+            return  # unpaired chat: no lock, no reply, no footprint
+        async with self._lock_for(chat_id):
+            await self._handle_command(chat_id, text)
 
     def _lock_for(self, chat_id: int) -> asyncio.Lock:
         lock = self._chat_locks.get(chat_id)
@@ -531,6 +540,7 @@ class Runtime:
             ):
                 return data
         except (json.JSONDecodeError, TypeError, ValueError):
+            memory.set_value(self.db, key, None)  # garbage marker: clear it
             return None
         memory.set_value(self.db, key, None)  # expired: don't eat the next message
         return None
@@ -541,18 +551,24 @@ class Runtime:
             if text.startswith("/start"):
                 parts = text.split(maxsplit=1)
                 code = parts[1].strip() if len(parts) > 1 else ""
-                if self._pairing_code and code == self._pairing_code:
+                expected = (
+                    memory.get_value(self.db, "pairing_code") or self._pairing_code
+                )
+                if expected and code == expected:
                     memory.set_value(self.db, "paired_chat", chat_id)
                     self.telegram.set_owner_chat_id(chat_id)
                     await self.telegram.send_message(
                         "Paired. This chat is now the owner channel.", "reminders"
                     )
                 else:
-                    await self.telegram.send_message(
-                        "Pairing requires a one-time code. On the Mac run: "
-                        "uv run python -m app.cli pair",
-                        "reminders",
-                    )
+                    try:
+                        await self.telegram.reply_to(
+                            chat_id,
+                            "Pairing requires a one-time code. On the Mac "
+                            "run: uv run python -m app.cli pair",
+                        )
+                    except Exception:
+                        log.exception("failed to answer wrong pairing code")
             return
         if chat_id != paired:
             log.warning("unpaired chat %s attempted command; ignored", chat_id)
@@ -612,10 +628,17 @@ class Runtime:
         verdict = str(event.payload["verdict"])
         chat_id = event.payload.get("chat_id")
         paired = memory.get_value(self.db, "paired_chat")
-        if paired is not None and chat_id is not None and chat_id != paired:
+        if paired is None:
+            # Fail closed: no pairing -> no approvals, and drop any stale
+            # in-memory owner the channel still holds.
+            if self.telegram is not None:
+                self.telegram.set_owner_chat_id(None)
+            log.warning("approval event with no pairing; dropped")
+            return
+        if chat_id is None or chat_id != paired:
             log.warning("approval event from non-paired chat %s; dropped", chat_id)
             return
-        async with self._lock_for(int(chat_id) if chat_id is not None else 0):
+        async with self._lock_for(int(chat_id)):
             await self._handle_approval(approval_id, verdict, chat_id)
 
     async def _handle_approval(

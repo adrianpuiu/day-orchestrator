@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import date, datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
@@ -50,6 +50,7 @@ class EffectScheduler:
         # job replays them so a long-lived process keeps scheduling future
         # days (launchd KeepAlive runs us for weeks, not one day).
         self._daily_specs: dict[str, list[str]] = {}
+        self._last_armed_day: date | None = None
 
     async def start(self) -> None:
         self._sched.start(paused=False)
@@ -116,6 +117,12 @@ class EffectScheduler:
         log.info("daily effects re-armed: %s", dict(self._daily_specs))
 
     async def _tick_reminders(self) -> None:
+        # Day-change reconcile: if the midnight re-arm was missed (a Mac can
+        # sleep far past its misfire grace), the next 60s tick re-arms today.
+        today = datetime.now(self._tz).date()
+        if today != self._last_armed_day:
+            self._last_armed_day = today
+            await self._rearm_daily()
         # Caller passes db lazily via set_database(); kept optional for tests.
         if self._db is None:
             return
