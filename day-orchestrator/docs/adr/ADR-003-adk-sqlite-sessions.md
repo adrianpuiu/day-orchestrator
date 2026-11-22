@@ -32,3 +32,15 @@ Negative (accepted): single-writer discipline required (one process; SQLite WAL 
 concurrent readers); SQLAlchemy is already an ADK dependency so no new weight; DB
 migrations are manual for v1 (single user, disposable dev state — a `schema_version`
 row guards future migrations).
+
+## Amendment (2026-11-22, as-built)
+
+- `DatabaseSessionService` requires the async driver: URL is
+  `sqlite+aiosqlite:///…` and the dependency is `google-adk[db]` (plain
+  `sqlite:///` raises at runtime). `aiosqlite` is pinned explicitly.
+- Model routing moved from literals to `core/models.py::resolve_model`
+  (see ADR-007): `config.toml` selects Gemini strings or a local
+  OpenAI-compatible endpoint; per-agent model strings unchanged.
+- New runtime deps recorded here for the dependency history:
+  `google-adk[extensions]` (LiteLLM) and `mcp>=2.2` (litellm's chat path
+  imports `mcp.types.CacheableResult` unconditionally).

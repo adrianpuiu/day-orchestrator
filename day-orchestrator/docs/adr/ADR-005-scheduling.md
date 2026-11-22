@@ -31,7 +31,10 @@ Reminders are persisted rows with their own fire-time checks recreated by the
 SQLAlchemy 2 silently failed to persist jobs (empty `apscheduler_jobs` after
 "Added job" logs). The store was dropped — it was redundant given
 `ensure_daily` + DB-row truth — and the semantics above are unchanged and
-verified by a start-fire test.
+verified by a start-fire test. Also: `misfire_grace_time` must be **seconds**
+(a `timedelta` raises TypeError → launchd crash loop), and a **flock instance
+lock** (`<data_dir>/.lock`) parks a redundant second instance instead of
+letting it create duplicate pollers.
 
 ## Alternatives considered
 

@@ -84,5 +84,7 @@ RUN_LIVE=1 uv run pytest tests/eval -q   # agent evals on the configured model (
 
 `send_email` is the only send path. It creates an approval row in SQLite, pauses the
 run (ADK resumability), and shows an Approve/Reject/Edit card in Telegram. Free text
-never authorizes; every transition lands in the append-only `action_log`. Enforced by
+never authorizes; every transition lands in the append-only `action_log`, and an
+at-most-once latch makes an approved row impossible to send twice. A failed SMTP send
+after approval pushes an explicit ❌ to the owner. Enforced by
 `tests/unit/test_send_path.py` + import-linter, not by review.

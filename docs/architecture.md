@@ -34,9 +34,9 @@ At most four critical: auditability, privacy, timeliness, reliability.
 ### Constraints
 
 1. **Single process, single machine, outbound-only networking.** Telegram via long polling, IMAP/SMTP outbound. No inbound listeners, no exposed ports, no public endpoint. → privacy (no attack surface), simplicity, affordability; enables D3 behind NAT.
-2. **SQLite-only persistence, one file (WAL).** ADK sessions via `DatabaseSessionService("sqlite:///...")`; app tables partitioned by module (tasks, approvals, action_log, jobstore, memory). → simplicity, affordability, reliability (crash-safe), auditability (transactional action log).
-3. **Uniform typed tool layer.** The LLM reaches the world only through tools; every tool declares an effect class: `read` | `draft` | `send`. → auditability, safety, extensibility (channel = adapter + tool set).
-4. **Approval gate as database state, not chat parsing.** `send`-class tools execute only against a **resolved approval row** (state machine: `pending → approved | rejected | edited`). The owner approves via Telegram inline-keyboard callbacks correlated by approval id. Free-text "yes" never authorizes. → auditability, reliability, testability. This is the system's single trust boundary; there is exactly one send path.
+2. **SQLite-only persistence, one file (WAL).** ADK sessions via `DatabaseSessionService("sqlite+aiosqlite:///...")`; app tables partitioned by module (tasks, approvals, action_log, tasks, reminders, memory, notification_budget). → simplicity, affordability, reliability (crash-safe), auditability (transactional action log).
+3. **Uniform typed tool layer.** The LLM reaches the world only through tools; every tool declares an effect class: `read` | `draft` | `send` | `notify`. → auditability, safety, extensibility (channel = adapter + tool set).
+4. **Approval gate as database state, not chat parsing.** `send`-class tools execute only against a **resolved approval row** (state machine: `pending → approved | rejected | cancelled`). The owner approves via Telegram inline-keyboard callbacks correlated by approval id; a pending draft can be edited before approval. Free-text "yes" never authorizes. An **at-most-once send latch** (`send:<approval_id>` claim) makes an approved row un-re-sendable, and a failed SMTP send after approval pushes an explicit failure note. → auditability, reliability, testability. This is the system's single trust boundary; there is exactly one send path.
 5. **Deterministic shell, LLM core.** Triggers, scheduling, and adapters are plain Python with no LLM calls. LLM executes only inside ADK agent/workflow steps with bounded, minimized inputs. → testability, affordability, predictability.
 6. **Domain-partitioned modules + typed in-process event bus.** Modules: `gmail`, `telegram`, `calendar`, `planner`, `triage`, `tasks`, `approval`, `memory`, `scheduler`, `orchestrator`. Cross-module communication via typed events on an in-process bus; adapters never call adapters; each module owns its tables. → extensibility, evolvability (a later Docker split is per-module), testability.
 7. **Idempotent catch-up scheduling.** Every scheduled effect carries a dedup key (`brief-2026-11-22-morning`). Missed ticks run **once** on wake, never N times; reminders and pending approvals survive restarts. → reliability, timeliness.
@@ -48,7 +48,7 @@ At most four critical: auditability, privacy, timeliness, reliability.
 
 | ID | Workflow | Trigger | Shape |
 |---|---|---|---|
-| W1 | Morning briefing | Scheduler 07:00 local | Sequential: fetch overnight mail → batch triage (flash-class model) → plan day (calendar + tasks) → compose brief card → Telegram |
+| W1 | Morning briefing | Scheduler 07:00 local | Sequential: fetch overnight mail → batch triage → task extraction → plan day (pre-rendered calendar + bucketed task lines) → compose brief → chunked Telegram push |
 | W2 | New-mail triage | IMAP IDLE (poll fallback 3 min) | Triage → update task candidates → notify only above importance threshold |
 | W3 | Follow-up sweep | Scheduler 2×/day | Loop pending awaiting-reply items → nudge suggestions |
 | W4 | Approval flow | Telegram callback | Resolve approval row → resume blocked pipeline → SMTP send → action log entry |
@@ -67,7 +67,7 @@ At most four critical: auditability, privacy, timeliness, reliability.
 | Persistence | SQLite (stdlib + ADK `DatabaseSessionService`) | one file, WAL |
 | Scheduling | APScheduler (in-memory store), launchd `KeepAlive` | catch-up on wake (C7); effects re-derived per boot |
 | Secrets | project `.env` (git-ignored), Keychain fallback | `app/core/secrets.py` |
-| Models | Gemini via ADK; flash-class for triage batches, stronger for planning | config-driven per agent |
+| Models | config-driven (ADR-007): Gemini strings, or local OpenAI-compatible endpoint via LiteLLM — currently `ds41` on the LAN | flash-class for triage batches, stronger for planning |
 
 ### System context (C4 level 1)
 
@@ -156,20 +156,22 @@ flowchart LR
 ## Evolution path (ordered by constraint cost)
 
 1. **Move to an always-on box (Docker on home server / VPS)** — trigger: missed brief > 1/week from sleep. Cheap: single process already container-izable; SQLite rides as a volume; long polling needs no ports. Deployment-level change first — cheapest class.
-2. **Local model option (Ollama / LM Studio, OpenAI-compatible)** — trigger: owner objects to mail content at the provider. Cheap: C9 already bounds exposure; ADK models are pluggable per agent.
+2. ~~**Local model option (Ollama / LM Studio, OpenAI-compatible)**~~ — **DONE 2026-11-22 (ADR-007)**: live on `ds41` at `192.168.0.206:8000/v1`; content minimization (C9) already bounded exposure; nightly evals (03:30) watch for drift.
 3. **Gmail API adapter** — trigger: need server-side labels/push/quota headroom. Swap behind the unchanged tool interface (C3); medium cost.
 4. **Calendar write access** — trigger: owner wants meeting scheduling. New `send`-class effect; reuses the approval gate unchanged. New ADR.
 5. **Never unless real**: multi-user, horizontal scale, microservice split (−2 target stands).
 
 ## Documentation & enforcement
 
-**ADRs to write** (scaffold-time):
+**ADRs** (all written — see `day-orchestrator/docs/adr/`):
 - ADR-001 — Derived style: Gated Proactive Monolith (this document's constraint set).
-- ADR-002 — Email transport IMAP/SMTP (owner-mandated) incl. auth sub-decision: app password vs XOAUTH2.
-- ADR-003 — ADK Python + `DatabaseSessionService` on SQLite.
-- ADR-004 — Approval gate: DB state machine + Telegram inline keyboard, never free-text authorization.
-- ADR-005 — Scheduling: APScheduler (in-memory store; effects re-derived per boot) + launchd wrapper, idempotent catch-up.
-- ADR-006 — Telegram long polling (no webhook) as the only user channel.
+- ADR-002 — Email transport IMAP/SMTP; app-password auth first, XOAUTH2 behind the client interface.
+- ADR-003 — ADK Python + `DatabaseSessionService` on SQLite (amended: `sqlite+aiosqlite`, `google-adk[db]`, model resolution).
+- ADR-004 — Approval gate: DB state machine + Telegram inline keyboard, never free-text authorization (amended: send latch, send-failure signal).
+- ADR-005 — Scheduling: APScheduler in-memory store, effects re-derived per boot, idempotent catch-up (amended: jobstore dropped, seconds not timedelta, instance lock).
+- ADR-006 — Telegram long polling (no webhook) as the only user channel (amended: HTML + chunking, owner-chat ownership, typing, visible failures).
+- ADR-007 — Model serving: config-driven Gemini strings or local OpenAI-compatible endpoint via LiteLLM; instruction-driven JSON (no `response_format`); datetime injection; nightly drift evals.
+- ADR-008 — Credentials: git-ignored `.env` is canonical, Keychain fallback; no hardcoded credentials, ever.
 
 **Enforcement gates (CI)**:
 - `import-linter` layer contract: `adapters → tools → agents → events`; adapters must not import adapters; only `orchestrator` imports across modules via the event bus.

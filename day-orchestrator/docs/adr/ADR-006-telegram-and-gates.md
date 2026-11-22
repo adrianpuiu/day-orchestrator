@@ -39,3 +39,22 @@ Negative (accepted): aiogram's polling loop owns reconnect logic; polling and th
 IDLE thread both bridge into one loop (thread-safe event posting only via
 `loop.call_soon_threadsafe`); Telegram rate limits apply to bursts — the notification
 budget (C10) already caps volume.
+
+## Amendment (2026-11-22, as-built)
+
+- **HTML parse mode, chunked sends**: MarkdownV2 with unescaped brief text
+  400s; sends are HTML, `split_message` chunks at line boundaries under the
+  4096-char cap (keyboard rides the last chunk) so a long brief can never be
+  rejected whole.
+- **Owner-chat ownership**: the channel holds `owner_chat_id`, injected by the
+  runtime (pairing seeded from `memory.paired_chat`, or set live at `/start`);
+  every bot call targets it. aiogram requires `chat_id` on every call — the
+  original implementation omitted it and fakes hid the bug until first live send.
+- **Typing indicator**: `start_typing()` repeats the chat action every 4 s for
+  the duration of an agent turn; cancelled when the reply (or failure note) lands.
+- **Visible failures**: a failing coordinator turn answers `⚠️ …` instead of
+  silence; LiteLLM retries (attempts=3, ADR-007) absorb model-server blips.
+- Enforcement gates live in `tests/unit/test_send_path.py` (AST scans: transport
+  imports, `approval.require_resolved` only in `app/tools.py`) plus the
+  import-linter contracts; layer order as-built is
+  `core ← channels ← tools ← workflows ← app`.

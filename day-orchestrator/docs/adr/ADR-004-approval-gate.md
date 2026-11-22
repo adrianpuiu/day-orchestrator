@@ -44,3 +44,19 @@ Positive: durable across restarts; append-only `action_log` gives the +4 audit s
 the same gate serves future send-class effects (calendar writes) unchanged.
 Negative (accepted): every send costs a round-trip — that friction is the product (D4);
 Edit flow needs a small keyed conversation state in the Telegram adapter.
+
+## Amendment (2026-11-22, as-built)
+
+- Implemented state set: `pending → approved | rejected | cancelled`, plus
+  `superseded` (= cancelled with `via='superseded'`) when a newer draft replaces
+  an older one. "Edit" is not a state: it updates the pending row's payload via
+  a keyed reply flow (`edit_pending:<chat>` in memory).
+- **At-most-once send latch**: the resumed tool claims `send:<approval_id>` in
+  the action log (unique) before touching SMTP — an approved row can never
+  double-send, however many times the run resumes.
+- **Send-failure signal**: if SMTP fails after approval, the owner gets an
+  explicit ❌ push and the log records `send_failed` — the earlier behavior
+  (card said "sending", nothing landed) was an audit hole.
+- Approval cards render Telegram HTML (ADR-006 amendment); the session holding
+  the paused run is stored on the approval row (`session_ref`) as
+  `{user_id, session_id}` JSON for out-of-band resume.
