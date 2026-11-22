@@ -44,10 +44,12 @@ class TelegramChannel:
         bot_token: str,
         bus: EventBus,
         *,
+        owner_chat_id: int | None = None,
         bot_factory: Any = None,
     ) -> None:
         """Store dependencies and build the bot, dispatcher, and router."""
         self._bus = bus
+        self._owner_chat_id = owner_chat_id  # set at runtime from pairing (C6)
         factory = bot_factory or (lambda token: Bot(token))
         self._bot = factory(bot_token)
         self._dispatcher = Dispatcher()
@@ -55,6 +57,17 @@ class TelegramChannel:
         self._dispatcher.include_router(self._router)
         self._register_handlers(self._router)
         self._poll_task: asyncio.Task[None] | None = None
+
+    def set_owner_chat_id(self, chat_id: int | None) -> None:
+        """Destination for proactive pushes; runtime owns pairing and calls this."""
+        self._owner_chat_id = chat_id
+
+    def _target_chat_id(self) -> int:
+        if self._owner_chat_id is None:
+            raise ValueError(
+                "no paired chat yet — send /start to the bot from your Telegram"
+            )
+        return self._owner_chat_id
 
     def _register_handlers(self, router: Router) -> None:
         """Attach the message and callback-query handlers to the router."""
@@ -129,8 +142,10 @@ class TelegramChannel:
         category: str,
         reply_markup: InlineKeyboardMarkup | None = None,
     ) -> dict[str, Any]:
-        """Send a Telegram-HTML notification and return its ids (NotifierProto)."""
+        """Send a Telegram-HTML notification to the paired chat (NotifierProto)."""
+        chat_id = self._target_chat_id()
         message = await self._bot.send_message(
+            chat_id=chat_id,
             text=text,
             parse_mode="HTML",
             reply_markup=reply_markup,
@@ -155,6 +170,7 @@ class TelegramChannel:
             ]
         )
         message = await self._bot.send_message(
+            chat_id=self._target_chat_id(),
             text=summary_text,
             parse_mode="HTML",
             reply_markup=markup,
@@ -169,6 +185,7 @@ class TelegramChannel:
     ) -> None:
         """Edit an already-sent message in place."""
         await self._bot.edit_message_text(
+            chat_id=self._target_chat_id(),
             message_id=message_id,
             text=text,
             parse_mode="HTML",

@@ -81,6 +81,9 @@ class FakeTelegram:
         self.messages: list[str] = []
         self.edits: list[str] = []
 
+    def set_owner_chat_id(self, chat_id: int | None) -> None:
+        pass
+
     async def start(self) -> None:
         pass
 

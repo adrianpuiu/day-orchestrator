@@ -15,6 +15,7 @@ from google.adk.agents import BaseAgent, SequentialAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
 
+from ..channels.calendar import CalendarNotConfigured
 from ..core import actionlog, budget, memory, tasks
 from ..core.config import Config
 from ..core.textfmt import escape_html, markdown_to_telegram_html
@@ -117,17 +118,40 @@ class AlertHigh(BaseAgent):
         yield Event(author=self.name)
 
 
+def _format_events(events: list[dict[str, Any]]) -> str:
+    """Renders calendar events as brief-ready markdown lines (local time)."""
+    from datetime import datetime
+
+    def _hm(iso: str) -> str:
+        return datetime.fromisoformat(str(iso)).astimezone().strftime("%H:%M")
+
+    lines: list[str] = []
+    for event in events:
+        try:
+            span = f"{_hm(event['start'])}–{_hm(event['end'])}"  # noqa: RUF001 — en dash reads better on iOS
+        except (KeyError, TypeError, ValueError):
+            span = "all-day"
+        line = f"- {span} {event.get('summary') or '(untitled)'}"
+        if event.get("location"):
+            line += f" · {event['location']}"
+        lines.append(line)
+    return "\n".join(lines) if lines else "No events."
+
+
 def briefing_loader(deps: ToolDeps, cfg: Config) -> Callable[[], Awaitable[dict[str, str]]]:
     async def loader() -> dict[str, str]:
         emails = await asyncio.to_thread(deps.gmail.fetch_recent, cfg.max_overnight_emails)
         try:
             events = await asyncio.to_thread(deps.calendar.get_events, 2)
+            calendar_lines = _format_events(events)
+        except CalendarNotConfigured:
+            calendar_lines = "Calendar not configured."
         except Exception:
             log.warning("calendar unavailable; briefing degrades", exc_info=True)
-            events = []
+            calendar_lines = "Calendar temporarily unavailable."
         return {
             "overnight_emails": json.dumps(emails),
-            "calendar_events": json.dumps(events),
+            "calendar_lines": calendar_lines,
             "open_tasks": json.dumps(tasks.list_open(deps.db)),
         }
 

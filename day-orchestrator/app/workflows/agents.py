@@ -19,7 +19,9 @@ Emails (JSON array; empty means none): {overnight_emails}
 
 For each email decide:
 - importance: "high" (action needed today, or a real person pressing),
-  "normal", or "low" (newsletters, notifications).
+  "normal", or "low" (newsletters, notifications, login/verification codes).
+  Verification codes, OTPs and "confirm device" emails are ALWAYS "low" —
+  they expire in minutes and are never actionable tasks.
 - category: needs_reply | meeting | newsletter | fyi | task | other
 - summary: one sentence.
 
@@ -33,12 +35,16 @@ BRIEF_INSTRUCTION = """Compose the owner's morning brief in concise Markdown (<=
 
 Inputs:
 - Triaged overnight email (JSON): {triage_json}
-- Calendar events (JSON): {calendar_events}
+- Calendar lines, pre-rendered (markdown): {calendar_lines}
 - Open tasks (JSON): {open_tasks}
 
 Structure:
 ## Day plan
-One short paragraph: what today looks like given the calendar and tasks.
+One short paragraph: what today looks like given the schedule and tasks.
+## Schedule
+Copy the calendar lines EXACTLY as given, one per line, keeping times and
+bullet format. If the first line says the calendar is not configured or
+unavailable, output just that line — do not claim the calendar is clear.
 ## Needs attention
 High-importance emails, one line each (subject — one-line why).
 ## Everything else

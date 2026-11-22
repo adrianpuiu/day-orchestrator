@@ -86,6 +86,8 @@ class Runtime:
             TelegramChannel(token, self.bus) if token else None
         )
         self.notifier = self.telegram or NullNotifier()
+        if self.telegram is not None:
+            self.telegram.set_owner_chat_id(memory.get_value(self.db, "paired_chat"))
 
         self.deps = ToolDeps(
             db=self.db,
@@ -222,7 +224,7 @@ class Runtime:
                 gtypes.Content(role="user", parts=[gtypes.Part.from_text(text="run")]),
             )
             actionlog.log(self.db, "pipeline", "brief_sent", "system",
-                          dedup_key=dedup_key)
+                          detail={"dedup_key": dedup_key})  # key lives in claim row (UNIQUE)
         except Exception:
             log.exception("briefing failed (%s) — gap is visible in action log", dedup_key)
             actionlog.log(self.db, "pipeline", "brief_failed", "system",
@@ -247,7 +249,7 @@ class Runtime:
             lines.append(f"• {escape_html(str(item.get('summary', '')))}")
         await self.notifier.send("\n".join(lines), "triage_alerts")
         actionlog.log(self.db, "pipeline", "sweep_notified", "notify",
-                      dedup_key=dedup_key, detail={"count": len(awaiting)})
+                      detail={"dedup_key": dedup_key, "count": len(awaiting)})
 
     def _replied_message_ids(self) -> set[str]:
         rows = self.db.query(
@@ -296,6 +298,7 @@ class Runtime:
         if paired is None:
             if text.startswith("/start"):
                 memory.set_value(self.db, "paired_chat", chat_id)
+                self.telegram.set_owner_chat_id(chat_id)
                 await self.telegram.send_message(
                     "Paired. This chat is now the owner channel.", "reminders"
                 )

@@ -94,7 +94,9 @@ def bus() -> EventBus:
 
 @pytest.fixture
 def channel(bus: EventBus) -> TelegramChannel:
-    return TelegramChannel("TOKEN", bus, bot_factory=lambda token: FakeBot())
+    return TelegramChannel(
+        "TOKEN", bus, owner_chat_id=42, bot_factory=lambda token: FakeBot()
+    )
 
 
 async def collect(bus: EventBus, event_type: str) -> list[Event]:
@@ -206,6 +208,7 @@ async def test_edit_message_text_passes_through(
     assert isinstance(bot, FakeBot)
     assert bot.edits == [
         {
+            "chat_id": 42,
             "message_id": 55,
             "text": "*updated*",
             "parse_mode": "HTML",
