@@ -36,7 +36,7 @@ BRIEF_INSTRUCTION = """Compose the owner's morning brief in concise Markdown (<=
 Inputs:
 - Triaged overnight email (JSON): {triage_json}
 - Calendar lines, pre-rendered (markdown): {calendar_lines}
-- Open tasks (JSON): {open_tasks}
+- Task lines, pre-bucketed (markdown): {task_lines}
 
 Structure:
 ## Day plan
@@ -45,6 +45,9 @@ One short paragraph: what today looks like given the schedule and tasks.
 Copy the calendar lines EXACTLY as given, one per line, keeping times and
 bullet format. If the first line says the calendar is not configured or
 unavailable, output just that line — do not claim the calendar is clear.
+## Tasks
+Copy the task lines EXACTLY as given, keeping the [bucket] labels and order
+(overdue first). If the first line says "No open tasks.", output exactly that.
 ## Needs attention
 High-importance emails, one line each (subject — one-line why).
 ## Everything else

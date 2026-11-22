@@ -152,7 +152,9 @@ def briefing_loader(deps: ToolDeps, cfg: Config) -> Callable[[], Awaitable[dict[
         return {
             "overnight_emails": json.dumps(emails),
             "calendar_lines": calendar_lines,
-            "open_tasks": json.dumps(tasks.list_open(deps.db)),
+            "task_lines": tasks.as_brief_lines(
+                tasks.list_open_bucketed(deps.db, cfg.timezone)
+            ),
         }
 
     return loader

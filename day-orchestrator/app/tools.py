@@ -114,8 +114,14 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
 
     @effect(Effect.READ)
     async def list_tasks() -> dict[str, Any]:
-        """Lists all open tasks with deadlines."""
-        return {"status": "success", "tasks": tasks.list_open(deps.db)}
+        """Lists all open tasks; each has a bucket: overdue | today | tomorrow | later | someday."""
+        today = tasks.local_today(deps.timezone)
+        rows = tasks.list_open(deps.db)
+        return {
+            "status": "success",
+            "tasks": [{**row, "bucket": tasks.bucket(row, today, deps.timezone)
+                       } for row in rows],
+        }
 
     @effect(Effect.READ)
     async def list_pending_approvals() -> dict[str, Any]:
