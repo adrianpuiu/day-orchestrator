@@ -23,7 +23,7 @@ jobs:
         run: uv sync
 
       - name: Lint (ruff)
-        run: uv run ruff check .
+        run: uv run --group lint ruff check .
 
       - name: Import layer contracts
         run: uv run lint-imports
