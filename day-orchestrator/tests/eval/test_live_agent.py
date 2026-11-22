@@ -82,8 +82,10 @@ async def test_triage_classification(
     rt.gmail.msgs = [make_email("1", subject, snippet)]
     await rt.on_new_mail(Event("gmail.new_messages", {"messages": rt.gmail.msgs}))
 
-    triage = memory.get_value(rt.db, "last_triage") or {}
-    items = triage.get("items", [])
+    rows = rt.db.query(
+        "SELECT summary, category, importance FROM email_triage"
+    )
+    items = [dict(r) for r in rows]
     assert items, f"triage produced no items for {subject!r}"
     item = items[0]
     imp, cat = item.get("importance"), item.get("category")
