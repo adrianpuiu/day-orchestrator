@@ -55,7 +55,10 @@ class AppleCalendarClient:
             granted = _request_access(EK, store)
             if not granted:
                 raise CalendarPermissionDenied(
-                    "Calendar consent was not granted (timed out or declined)"
+                    f"Calendar consent not granted (status={status}). If no dialog "
+                    "appeared, macOS suppressed it — an earlier timed-out prompt is "
+                    "remembered. Fix once: System Settings → Privacy & Security → "
+                    "Calendars → enable this python entry."
                 )
         self._store = store
         return store

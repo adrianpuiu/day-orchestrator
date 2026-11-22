@@ -199,9 +199,10 @@ class Runtime:
         try:
             if self.calendar.access_status() != 3:
                 await self.notifier.send(
-                    "Calendar access isn't granted to the background service "
-                    "yet. The next calendar action pops a macOS dialog — click "
-                    "OK within 2 minutes and it will be remembered.",
+                    "Calendar access isn't granted to the background service. "
+                    "Fix once: System Settings → Privacy & Security → Calendars "
+                    "→ enable the python entry. If no dialog ever appears, tell "
+                    "the operator — macOS may be suppressing it.",
                     "triage_alerts",
                 )
         except Exception:
