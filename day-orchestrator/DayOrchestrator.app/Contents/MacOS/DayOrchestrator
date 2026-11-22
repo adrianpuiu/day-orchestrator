@@ -4,4 +4,10 @@
 # this .app wrapper — bare launchd binaries get prompts silently suppressed.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
+if [ "${1:-}" = "serve" ]; then
+  # Run the full orchestrator as the bundle's main process so TCC attributes
+  # EventKit consent to com.agp.day-orchestrator (launchd-owned bare binaries
+  # get their prompts silently suppressed).
+  exec .venv/bin/python -m app.cli run
+fi
 exec .venv/bin/python -m app.channels.calendar_helper "$@"

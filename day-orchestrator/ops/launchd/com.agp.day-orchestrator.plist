@@ -13,14 +13,8 @@
     <string>com.agp.day-orchestrator</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/agp/.local/bin/uv</string>
-        <string>run</string>
-        <string>--directory</string>
-        <string>/Users/agp/Desktop/google-adk/day-orchestrator</string>
-        <string>python</string>
-        <string>-m</string>
-        <string>app.cli</string>
-        <string>run</string>
+        <string>/Users/agp/Desktop/google-adk/day-orchestrator/DayOrchestrator.app/Contents/MacOS/DayOrchestrator</string>
+        <string>serve</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
