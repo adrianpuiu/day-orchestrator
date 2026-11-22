@@ -55,3 +55,8 @@ RRULE strings), and `edit_calendar_event` / `delete_calendar_event` —
 edits apply to a single occurrence (`EKSpanThisEvent`), deletes remove the
 event and all future occurrences (`EKSpanFutureEvents`); both gated.
 `get_events` now exposes the EventKit `id`, which those tools consume.
+Locations are geocoded before the card (Apple `CLGeocoder` — needs the
+bundle identity plus `NSApplication` + main-run-loop pump; bare CLIs never
+get the callback) and attached as `EKStructuredLocation.geoLocation`
+coordinates (macOS 26 API; `setRegion_` is gone) — travel-time aware on the
+iPhone. Geocode failures degrade to the owner-typed string.

@@ -48,11 +48,11 @@ At most four critical: auditability, privacy, timeliness, reliability.
 
 | ID | Workflow | Trigger | Shape |
 |---|---|---|---|
-| W1 | Morning briefing | Scheduler 07:00 local | Sequential: fetch overnight mail → batch triage → task extraction → plan day (pre-rendered calendar + bucketed task lines) → compose brief → chunked Telegram push |
-| W2 | New-mail triage | IMAP IDLE (poll fallback 3 min) | Triage → update task candidates → notify only above importance threshold |
-| W3 | Follow-up sweep | Scheduler 2×/day | Loop pending awaiting-reply items → nudge suggestions |
-| W4 | Approval flow | Telegram callback | Resolve approval row → resume blocked pipeline → SMTP send → action log entry |
-| W5 | Coordinator | Telegram free text | ADK command agent with the tool set |
+| W1 | Morning briefing | Scheduler 07:00 local | Sequential: fetch overnight mail → batch triage → **persist** (`email_triage`) → task extraction → plan day (pre-rendered calendar + bucketed task lines + awaiting-reply lines) → compose brief → chunked Telegram push |
+| W2 | New-mail triage | IMAP IDLE (poll fallback 3 min) | Triage → **persist** (`email_triage`, first-seen wins) → notify only above importance threshold |
+| W3 | Follow-up sweep | Scheduler 2×/day (13:00, 18:00) | Read `email_triage` needs_reply (≤7 days) → drop actually-replied threads (`in_reply_to` audit) → budgeted "Awaiting your reply" push |
+| W4 | Approval flow | Telegram callback | Resolve approval row → resume blocked pipeline → SMTP send / EventKit write → action log entry |
+| W5 | Coordinator | Telegram free text | ADK command agent with the tool set; recommends conflict-free slots for underspecified moves; Romanian weekday mapping verified before tool calls |
 
 ### Stack
 
@@ -63,8 +63,9 @@ At most four critical: auditability, privacy, timeliness, reliability.
 | Telegram | `aiogram` 3.x, long polling | no webhook → no public endpoint (C1) |
 | IMAP | `IMAPClient` (IDLE support), executor thread bridged to asyncio | IDLE flaky → 3-min poll fallback |
 | SMTP | stdlib `smtplib`, STARTTLS 587 | sends only via approval-gated path |
-| Calendar | **Apple EventKit local sync** (ADR-009): reads Calendar.app — same events as the iPhone, no OAuth | Google Calendar API adapter kept behind `calendar_backend = "google"` |
-| Persistence | SQLite (stdlib + ADK `DatabaseSessionService`) | one file, WAL |
+| Calendar | **Apple EventKit via `.app` bundle** (ADR-009 + addenda): full read + gated writes (create/edit/delete, recurrence, alarms, notes, invitees-in-notes, geocoded structured locations); writes target `calendar_target` (default Home) | Google Calendar API adapter kept behind `calendar_backend = "google"` (read-only) |
+| Geocoding | `CLGeocoder` inside the bundle (NSApplication + run-loop pump recipe) | validates event locations, attaches coordinates (travel-time on iPhone); no TCC needed |
+| Persistence | SQLite (stdlib + ADK `DatabaseSessionService`) | one file, WAL; `email_triage` = triage source of truth (ADR-010) |
 | Scheduling | APScheduler (in-memory store), launchd `KeepAlive` | catch-up on wake (C7); effects re-derived per boot |
 | Secrets | project `.env` (git-ignored), Keychain fallback | `app/core/secrets.py` |
 | Models | config-driven (ADR-007): Gemini strings, or local OpenAI-compatible endpoint via LiteLLM — currently `ds41` on the LAN | flash-class for triage batches, stronger for planning |
@@ -158,7 +159,7 @@ flowchart LR
 1. **Move to an always-on box (Docker on home server / VPS)** — trigger: missed brief > 1/week from sleep. Cheap: single process already container-izable; SQLite rides as a volume; long polling needs no ports. Deployment-level change first — cheapest class.
 2. ~~**Local model option (Ollama / LM Studio, OpenAI-compatible)**~~ — **DONE 2026-11-22 (ADR-007)**: live on `ds41` at `192.168.0.206:8000/v1`; content minimization (C9) already bounded exposure; nightly evals (03:30) watch for drift.
 3. **Gmail API adapter** — trigger: need server-side labels/push/quota headroom. Swap behind the unchanged tool interface (C3); medium cost.
-4. ~~**Calendar write access**~~ **Delivered (ADR-009 addendum)**: `add_calendar_event` writes via EventKit, send-class effect behind the unchanged approval gate; live-proven. Google-backend writes remain open.
+4. ~~**Calendar write access**~~ **Delivered (ADR-009 addenda)**: full CRUD behind the gate — `add_calendar_event` (notes, invitees-in-notes, alarms, recurrence, geocoded `structuredLocation`), `edit_calendar_event` (single occurrence), `delete_calendar_event` (event + future); geocoding via Apple `CLGeocoder` in the bundle. Google-backend writes remain open.
 5. **Never unless real**: multi-user, horizontal scale, microservice split (−2 target stands).
 6. **ADK `SequentialAgent` → `Workflow` API migration** — ADK deprecation warning (2026-11-22): SequentialAgent will be removed in a future version; `Workflow` cannot yet be used as an `LlmAgent` sub-agent, so migrate only when ADK reaches parity. Cheap swap behind unchanged pipelines.
 

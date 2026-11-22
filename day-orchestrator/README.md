@@ -5,7 +5,7 @@ Google ADK (Python). Runs on your Mac; outbound-only networking; every email sen
 approval-gated via Telegram and audited in SQLite.
 
 Docs: [`docs/architecture.md`](docs/architecture.md) (constraint set) ·
-[`docs/adr/`](docs/adr/) (ADR-001…006).
+[`docs/adr/`](docs/adr/) (ADR-001…010).
 
 ## Layout
 
@@ -15,12 +15,17 @@ app/
   runtime.py      composition root: adapters, scheduler, runners, bus, approval resume
   cli.py          setup + ops CLI (secrets, calendar consent, run, smoke)
   smoke.py        offline proof of the approval gate (no network, no real model)
-  tools.py        typed tool layer: read | draft | send | notify; single send path
-  core/           config, secrets, db, event bus, approval gate, scheduler, budget
-  channels/       gmail (IMAP IDLE + SMTP), telegram (long polling), calendar (read-only)
-  workflows/      W1 briefing · W2 triage · W3 sweep pipelines (LLM only in agent steps)
+  tools.py        typed tool layer: read | draft | send | notify; gated email +
+                  calendar effects (create/edit/delete events, alarms, recurrence,
+                  geocoded locations)
+  core/           config, secrets, db (incl. email_triage), event bus, approval
+                  gate, scheduler, budget, human date formatting
+  channels/       gmail (IMAP IDLE + SMTP), telegram (long polling),
+                  calendar (EventKit read+write via .app bundle, geocode)
+  workflows/      W1 briefing · W2 triage · W3 follow-up sweep (LLM only in agent steps)
 ops/launchd/      KeepAlive wrapper for always-on operation
-tests/            unit (fakes, no network) + integration (approval-gate proofs)
+DayOrchestrator.app/   bundle wrapper: TCC identity for EventKit + geocoding
+tests/            unit (fakes) + integration (gate proofs, RUN_MAC EventKit probes)
 ```
 
 ## Setup (owner runs these — secrets never go through chat)
@@ -62,32 +67,45 @@ planner_model = "ds41"
 coordinator_model = "ds41"
 brief_time = "07:00"
 budgets = { briefing = 1, triage_alerts = 5, reminders = 20 }
+calendar_backend = "apple"     # "apple" (EventKit via bundle) | "google" (read-only)
+calendar_target = "Home"       # agent event writes land here ("" = macOS default)
 ```
 
 Structured output is instruction-driven JSON with tolerant parsing (no
 `response_format`), so any engine works; tool calling must be supported by the
 engine for the coordinator and task extraction.
 
+Owner-facing date format is `DD/MM/YYYY - HH:MM` (brief lines, approval cards,
+chat); internals stay ISO.
+
 ## Verify
 
 ```bash
-uv run pytest -q            # 43 tests: gate, bus, stores, adapters (fakes), gate E2E
+uv run pytest -q            # 73 tests: gate, bus, stores, adapters (fakes), gate
+                            # E2E, dedup, geocode args, preflight, retry loop
 uv run lint-imports         # layer + channel-independence contracts (ADR-006)
 uv run ruff check .
 uv run python -m app.smoke  # prints the offline approval-gate proof
-RUN_LIVE=1 uv run pytest tests/eval -q   # agent evals on the configured model (9):
-#   triage judgment (OTP=low, invoice=urgent, meeting=needs_reply), brief
-#   structure (sections, carry-over format, no invented times), rubric-judged
-#   readability, multi-turn session continuity, coordinator tool routing
-#   (task add via tool with correct date resolution, email always pauses
-#   behind the gate). Nightly at 03:30 via launchd; Telegram alert on failure.
+RUN_LIVE=1 uv run pytest tests/eval -q   # agent evals on the configured model (14):
+#   triage judgment (OTP=low, invoice=urgent, meeting=needs_reply, persisted to
+#   email_triage), brief structure (sections, awaiting-reply, carry-over format,
+#   no invented times), rubric-judged readability, multi-turn session
+#   continuity, coordinator tool routing: task add, email through the gate,
+#   calendar create/edit/delete through the gate, slot proposal for
+#   underspecified moves. Nightly at 03:30 via launchd; Telegram alert on failure.
+RUN_MAC=1 uv run pytest tests/integration/test_helper_live.py -q
+#   real EventKit probes through DayOrchestrator.app: TCC status, reads,
+#   create with alarm + structured location, series rename override,
+#   series delete; self-cleaning.
 ```
 
 ## Trust boundary
 
-`send_email` is the only send path. It creates an approval row in SQLite, pauses the
-run (ADK resumability), and shows an Approve/Reject/Edit card in Telegram. Free text
-never authorizes; every transition lands in the append-only `action_log`, and an
-at-most-once latch makes an approved row impossible to send twice. A failed SMTP send
-after approval pushes an explicit ❌ to the owner. Enforced by
-`tests/unit/test_send_path.py` + import-linter, not by review.
+`send_email` and the calendar writes (`add_calendar_event`,
+`edit_calendar_event`, `delete_calendar_event`) are gated paths: an approval
+row in SQLite, a paused run (ADK resumability), an Approve/Reject/Edit card in
+Telegram. Free text never authorizes; every transition lands in the
+append-only `action_log`, and an at-most-once latch makes an approved row
+impossible to apply twice (identical duplicate calls collapse onto the open
+card). A failed effect after approval pushes an explicit ❌ to the owner.
+Enforced by `tests/unit/test_send_path.py` + import-linter, not by review.
