@@ -75,10 +75,25 @@ def test_target_calendar_flag_is_passed() -> None:
         runner=lambda args: (captured.append(args), {"event_id": "ek-2"})[1],
         target_calendar="Home",
     )
-    client.create_event("x", "2026-11-23T10:30", "2026-11-23T11:00")
+    client.create_event(
+        "x", "2026-11-23T10:30", "2026-11-23T11:00", alarm_minutes=30
+    )
 
     assert "--calendar" in captured[0]
     assert captured[0][captured[0].index("--calendar") + 1] == "Home"
+    assert "--alarm-minutes" in captured[0]
+    assert captured[0][captured[0].index("--alarm-minutes") + 1] == "30"
+
+
+def test_zero_alarm_omits_flag() -> None:
+    captured: list[list[str]] = []
+
+    client = AppleCalendarClient(
+        runner=lambda args: (captured.append(args), {"event_id": "ek-3"})[1]
+    )
+    client.create_event("x", "2026-11-23T10:30", "2026-11-23T11:00")
+
+    assert not any("--alarm-minutes" in a for a in captured[0])
 
 
 def test_permission_exit_maps_to_denied() -> None:

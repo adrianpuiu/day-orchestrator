@@ -338,6 +338,7 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         end: str,
         notes: str | None = None,
         invitees: list[str] | None = None,
+        alarm_minutes: int = 30,
     ) -> dict[str, Any]:
         """Creates an event in the owner's Apple Calendar (syncs to iPhone).
         REQUIRES owner approval via Telegram before writing.
@@ -350,6 +351,8 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             invitees: Optional email list; recorded in the notes (EventKit has
                 no public attendee API). To send real invitations, also call
                 send_email to each invitee after this is approved.
+            alarm_minutes: Alert N minutes before the start (default 30;
+                0 disables the alarm).
         """
 
         async def execute(row: approval.Approval) -> dict[str, Any]:
@@ -358,6 +361,7 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
                 final["title"], final["start"], final["end"],
                 notes=final.get("notes") or "",
                 invitees=final.get("invitees") or None,
+                alarm_minutes=int(final.get("alarm_minutes") or 0),
             )
             actionlog.log(
                 deps.db, "gate", "calendar_event_created", "send", approval_id=row.id,
@@ -368,6 +372,7 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         payload = {
             "title": title, "start": start, "end": end,
             "notes": notes, "invitees": invitees,
+            "alarm_minutes": max(0, int(alarm_minutes)),
         }
         summary = title + (f" — {notes[:80]}" if notes else "")
         return await _gated(

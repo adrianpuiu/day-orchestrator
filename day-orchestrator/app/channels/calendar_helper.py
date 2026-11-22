@@ -42,6 +42,10 @@ def main() -> None:
         "--calendar", default="",
         help="target calendar title; empty = system default for new events",
     )
+    p_create.add_argument(
+        "--alarm-minutes", type=int, default=0,
+        help="fire an alert N minutes before the event (0 = no alarm)",
+    )
     sub.add_parser("status")
     args = parser.parse_args()
 
@@ -151,6 +155,10 @@ def main() -> None:
     )
     event.setEndDate_(EK_NSDATE_from(datetime.fromisoformat(args.end).astimezone()))
     event.setCalendar_(calendar)
+    if args.alarm_minutes > 0:
+        event.addAlarm_(
+            EK.EKAlarm.alarmWithRelativeOffset_(-args.alarm_minutes * 60.0)
+        )
     ok, error = store.saveEvent_span_commit_error_(
         event, EK.EKSpanThisEvent, True, None
     )

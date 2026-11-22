@@ -47,3 +47,6 @@ tap; evolution step 4 delivered early for local writes). Notes are supported
 (`setDescription_`); **real attendees are not** — EventKit has no public API
 to construct `EKParticipant` objects, so invitees land in the event notes
 ("Attendees: …") and real invitations go through the gated `send_email`.
+Alarms are supported (`EKAlarm` relative offset): `add_calendar_event` defaults
+to 30 minutes before the start (0 disables); they sync to the iPhone via
+iCloud. Calendar.app may layer its own per-calendar default alert on top.

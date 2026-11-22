@@ -65,15 +65,19 @@ class AppleCalendarClient:
         end_iso: str,
         notes: str = "",
         invitees: list[str] | None = None,
+        alarm_minutes: int = 0,
     ) -> str:
         """Write: create an event in the default calendar; returns its id.
 
         Invitees land in the notes (EventKit has no public attendee API);
         real invitations go through the gated send_email tool.
+        alarm_minutes > 0 attaches an alert N minutes before the start.
         """
         args = ["create-event", "--title", title, "--start", start_iso, "--end", end_iso]
         if self._target:
             args += ["--calendar", self._target]
+        if alarm_minutes > 0:
+            args += ["--alarm-minutes", str(alarm_minutes)]
         if notes:
             args += ["--notes", notes]
         if invitees:

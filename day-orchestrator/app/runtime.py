@@ -260,6 +260,9 @@ class Runtime:
                 summary += f"\n{escape_html(notes[:200])}"
             if invitees:
                 summary += f"\nAttendees: {escape_html(', '.join(map(str, invitees)))}"
+            alarm = int(p.get("alarm_minutes") or 0)
+            if alarm:
+                summary += f"\nAlarm: {alarm} min before"
         else:
             summary = (
                 "<b>Send this email?</b>\n"
