@@ -347,12 +347,14 @@ class GmailWatcher:
         *,
         idle_check_timeout: int = 1740,
         max_batch: int = 20,
+        on_persistent_failure: Callable[[str], None] | None = None,
     ) -> None:
         self._client = client
         self._on_new_messages = on_new_messages
         self._poll_seconds = poll_seconds
         self._idle_check_timeout = idle_check_timeout
         self._max_batch = max_batch
+        self._on_persistent_failure = on_persistent_failure
         self._seen: set[int] = set()
         # Set when the baseline seed failed: the first poll must then treat
         # the whole inbox as a fresh baseline instead of replaying history.
@@ -435,16 +437,34 @@ class GmailWatcher:
 
     # ------------------------------------------------------------------ loop
 
+
     def _run(self) -> None:
         """Baseline seed, then IDLE loop with poll fallback; never raises."""
         self._seed_baseline()
         backoff = 1.0
+        streak = 0
+        alerted = False
         while not self._stop.is_set():
             try:
                 self._idle_cycle()
                 backoff = 1.0
+                streak = 0
+                alerted = False
             except Exception:
+                streak += 1
                 log.exception("watcher cycle failed; backing off")
+                if (
+                    self._on_persistent_failure is not None
+                    and streak >= 10
+                    and not alerted
+                ):
+                    alerted = True  # one-shot per streak, not per failure
+                    try:
+                        self._on_persistent_failure(
+                            f"{streak} consecutive failed watcher cycles"
+                        )
+                    except Exception:
+                        log.exception("persistent-failure callback failed")
                 self._stop.wait(min(backoff, 60.0))
                 backoff = min(backoff * 2, 60.0)
 

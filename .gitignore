@@ -1,2 +1,4 @@
 # LinkedIn post draft — never commit this file
 /linkedin-post.md
+# Agent branch-context state — session continuity, never commit
+/.claude/

@@ -37,7 +37,7 @@ def _render_agent_plist(project_root: Path, data_dir: Path) -> dict:
         "ProgramArguments": [str(bundle), "serve"],
         "RunAtLoad": True,
         "KeepAlive": True,
-        "ThrottleInterval": 30,
+        "ThrottleInterval": 300,
         "StandardOutPath": str(log_dir / "stdout.log"),
         "StandardErrorPath": str(log_dir / "stderr.log"),
         "EnvironmentVariables": {"PYTHONDONTWRITEBYTECODE": "1"},
@@ -242,10 +242,19 @@ def main() -> None:
     elif args.cmd == "run":
         import logging
         import signal
+        from logging.handlers import RotatingFileHandler
 
+        rotating = RotatingFileHandler(
+            Config.load().data_dir / "logs" / "agent.log",
+            maxBytes=2_000_000,
+            backupCount=5,
+        )
+        rotating.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s"))
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+            handlers=[logging.StreamHandler(), rotating],
         )
         from .runtime import Runtime
 

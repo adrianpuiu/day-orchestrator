@@ -24,5 +24,6 @@ def resolve_model(cfg: Config, spec: str):
         model=f"openai/{spec}",
         api_base=cfg.model_api_base,
         api_key=cfg.model_api_key,
+        timeout=120,  # hung local endpoint must fail in minutes, not 600s x3
         retry_options=gtypes.HttpRetryOptions(attempts=3),
     )

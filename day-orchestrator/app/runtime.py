@@ -240,6 +240,7 @@ class Runtime:
             self.gmail,
             on_new_messages=self._on_new_messages_threadsafe,
             poll_seconds=self.cfg.gmail_poll_seconds,
+            on_persistent_failure=self._watcher_unhealthy,
         )
         self._watcher.start()
         log.info("runtime started (db=%s)", self.cfg.db_path)
@@ -282,6 +283,22 @@ class Runtime:
 
     def request_stop(self) -> None:
         self._stop.set()
+
+    def _watcher_unhealthy(self, detail: str) -> None:
+        """Watcher thread signals persistent failure; push an owner alert."""
+        if self.loop is None:
+            return
+        self.loop.call_soon_threadsafe(self._push_watcher_alert, detail)
+
+    async def _push_watcher_alert(self, detail: str) -> None:
+        try:
+            await self.notifier.send(
+                "⚠️ Gmail watcher failing repeatedly — email triage is "
+                f"degraded. {escape_html(detail)}",
+                "triage_alerts",
+            )
+        except Exception:
+            log.exception("watcher health alert push failed")
 
     def _on_new_messages_threadsafe(self, emails: list[dict]) -> None:
         if self.loop is not None and emails:
@@ -406,7 +423,7 @@ class Runtime:
                 raise _AttemptFailure(produced, exc) from exc
             return local_final, produced
 
-        final, _produced = await _retry_async(attempt)
+        final, _ = await _retry_async(attempt)
         return final
 
     async def run_briefing(self, dedup_key: str) -> None:
@@ -546,6 +563,7 @@ class Runtime:
         return None
 
     async def _handle_command(self, chat_id: int, text: str) -> None:
+        assert self.telegram is not None  # on_command guarantees it
         paired = memory.get_value(self.db, "paired_chat")
         if paired is None:
             if text.startswith("/start"):
