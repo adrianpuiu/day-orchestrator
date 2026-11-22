@@ -244,9 +244,10 @@ async def test_coordinator_multi_turn(runtime: Runtime) -> None:
     assert tasks.list_open(rt.db) == [], "turn 3: task not completed"
 
 
-async def test_coordinator_asks_before_underspecified_move(runtime: Runtime) -> None:
-    """'move the dentist' without a target must produce a chat QUESTION,
-    not an approval card with a guessed target."""
+async def test_coordinator_proposes_target_for_underspecified_move(runtime: Runtime) -> None:
+    """'move the dentist' without a target: the coordinator must PROPOSE a
+    concrete conflict-free slot — a card with a chosen target, explained in
+    chat — and not touch the calendar before approval."""
     rt = runtime
     memory.set_value(rt.db, "paired_chat", 42)
     replies: list[str] = []
@@ -259,17 +260,32 @@ async def test_coordinator_asks_before_underspecified_move(runtime: Runtime) -> 
 
     rt.telegram.send_message = tee_sm
 
+    # Seed a real upcoming appointment so there is something to move.
+    from datetime import datetime, timedelta
+
+    tomorrow = (datetime.now().astimezone() + timedelta(days=1)).replace(
+        hour=10, minute=0, second=0, microsecond=0
+    )
+    rt.deps.calendar_writer.events.append({
+        "id": "ek-dentist",
+        "title": "Dentist",
+        "start": tomorrow.isoformat(timespec="minutes"),
+        "end": (tomorrow + timedelta(hours=1)).isoformat(timespec="minutes"),
+        "notes": "", "invitees": [], "alarm_minutes": 0,
+    })
+
     await rt.bus.publish(
         Event(TELEGRAM_COMMAND, {"text": "move the dentist appointment",
                                  "chat_id": 42, "message_id": 4})
     )
 
-    assert approval.list_pending(rt.db) == [], (
-        "underspecified move must not create an approval card"
+    pending = approval.list_pending(rt.db)
+    assert pending and pending[0].kind == "edit_calendar_event", (
+        "underspecified move should produce an edit proposal card; "
+        f"got pending={[a.kind for a in pending]!r}, replies={replies[-2:]!r}"
     )
+    payload = pending[0].payload
+    assert payload.get("new_start"), "proposal card must carry a concrete target"
     assert rt.deps.calendar_writer.update_calls == [], (
-        "nothing may be moved without a stated target"
-    )
-    assert replies and "?" in replies[-1], (
-        f"coordinator must ask for the target day/time; got: {replies[-1:]!r}"
+        "nothing may be moved before approval"
     )

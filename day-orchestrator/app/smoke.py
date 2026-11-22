@@ -113,7 +113,7 @@ class FakeCalendar:
 
     def get_events(self, days: int) -> list[dict]:
         self.fetched.append(days)
-        return []
+        return list(self.events)
 
     def create_event(self, title: str, start: str, end: str,
                      notes: str = "", invitees: list[str] | None = None,
