@@ -4,7 +4,7 @@ Single-user agent orchestrator that organizes your day: Gmail (IMAP/SMTP) + Tele
 Google ADK (Python). Runs on your Mac; outbound-only networking; email sends and
 calendar writes are approval-gated via Telegram and audited in SQLite.
 
-Docs: [`docs/architecture.md`](docs/architecture.md) (constraint set) ·
+Docs: [`../docs/architecture.md`](../docs/architecture.md) (constraint set) ·
 [`docs/adr/`](docs/adr/) (ADR-001…010).
 
 ## Quick start (macOS, ~5 minutes)
