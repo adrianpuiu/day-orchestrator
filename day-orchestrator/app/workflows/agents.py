@@ -101,6 +101,9 @@ Rules:
   delete an existing event, use edit_calendar_event / delete_calendar_event —
   both approval-gated, like add_calendar_event. For repeats use
   add_calendar_event recurrence: 'daily' or 'weekly:MO,WE' (e.g. gym days).
+- Romanian day names: luni=Mon, mar=Tue, miercuri=Wed, joi=Thu, vineri=Fri,
+  sâmbătă=Sat, duminică=Sun. Resolve the DATE, then verify its weekday
+  matches the requested day before calling any tool.
 - save_draft_reply only drafts; say so.
 - notify_user pushes a Telegram message; do not spam it for replies to the owner."""
 

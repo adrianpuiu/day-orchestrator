@@ -129,8 +129,8 @@ class FakeCalendar:
         return event_id
 
     def geocode(self, query: str, lat=None, lon=None) -> list[dict]:
-        return [{"name": query, "address": query, "lat": lat or 46.57,
-                 "lon": lon or 26.90}]
+        return [{"name": query, "address": f"{query} (validated)",
+                 "lat": lat or 46.57, "lon": lon or 26.90}]
 
     def get_event_meta(self, event_id: str) -> dict | None:
         return next((e for e in self.events if e["id"] == event_id), None)

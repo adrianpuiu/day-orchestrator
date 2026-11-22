@@ -21,7 +21,7 @@ import pytest
 
 from app.core import approval, memory, tasks
 from app.core.config import Config
-from app.core.events import TELEGRAM_COMMAND, Event
+from app.core.events import TELEGRAM_APPROVAL, TELEGRAM_COMMAND, Event
 from app.core.secrets import InMemoryBackend, Secrets
 from app.runtime import Runtime
 from app.smoke import FakeCalendar, FakeGmail, FakeTelegram
@@ -154,6 +154,68 @@ async def test_coordinator_calendar_write_goes_through_gate(runtime: Runtime) ->
     assert kind == "create_calendar_event", f"wrong approval kind: {kind!r}"
     assert rt.deps.calendar_writer.events == [], (
         "nothing may be written to the calendar without approval"
+    )
+
+
+async def test_coordinator_edit_goes_through_gate(runtime: Runtime) -> None:
+    rt = runtime
+    memory.set_value(rt.db, "paired_chat", 42)
+    from datetime import datetime, timedelta
+
+    tomorrow = (datetime.now().astimezone() + timedelta(days=1)).replace(
+        hour=10, minute=0, second=0, microsecond=0
+    )
+    rt.deps.calendar_writer.events.append({
+        "id": "ek-dentist", "title": "Dentist",
+        "start": tomorrow.isoformat(timespec="minutes"),
+        "end": (tomorrow + timedelta(hours=1)).isoformat(timespec="minutes"),
+        "notes": "", "invitees": [], "alarm_minutes": 0, "location": "",
+    })
+    await rt.bus.publish(
+        Event(TELEGRAM_COMMAND, {"text": "move the dentist to the day after "
+                                         "tomorrow at 15:00",
+                                 "chat_id": 42, "message_id": 5})
+    )
+    pending = approval.list_pending(rt.db)
+    assert pending and pending[0].kind == "edit_calendar_event", (
+        f"move must raise an edit card; got {[a.kind for a in pending]!r}"
+    )
+    assert rt.deps.calendar_writer.update_calls == [], (
+        "nothing may move before approval"
+    )
+    await rt.bus.publish(
+        Event(TELEGRAM_APPROVAL, {"approval_id": pending[0].id,
+                                  "verdict": "approved", "chat_id": 42,
+                                  "message_id": 6})
+    )
+    assert rt.deps.calendar_writer.update_calls == ["ek-dentist"], (
+        "approved edit must apply the move"
+    )
+
+
+async def test_coordinator_delete_goes_through_gate(runtime: Runtime) -> None:
+    rt = runtime
+    memory.set_value(rt.db, "paired_chat", 42)
+    rt.deps.calendar_writer.events.append({
+        "id": "ek-coffee", "title": "Cafea cu Diana",
+        "start": "2026-11-23T17:30", "end": "2026-11-23T18:30",
+        "notes": "", "invitees": [], "alarm_minutes": 0, "location": "",
+    })
+    await rt.bus.publish(
+        Event(TELEGRAM_COMMAND, {"text": "delete the coffee with Diana event",
+                                 "chat_id": 42, "message_id": 7})
+    )
+    pending = approval.list_pending(rt.db)
+    assert pending and pending[0].kind == "delete_calendar_event", (
+        f"delete must raise a delete card; got {[a.kind for a in pending]!r}"
+    )
+    await rt.bus.publish(
+        Event(TELEGRAM_APPROVAL, {"approval_id": pending[0].id,
+                                  "verdict": "approved", "chat_id": 42,
+                                  "message_id": 8})
+    )
+    assert rt.deps.calendar_writer.get_event_meta("ek-coffee") is None, (
+        "approved delete must remove the event"
     )
 
 

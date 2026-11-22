@@ -65,3 +65,20 @@ async def test_approval_gate_calendar_reject_never_writes(tmp_path: Path) -> Non
     assert result["approval_state"] == "rejected"
     assert result["events"] == [], "rejected calendar write must never happen"
     assert "calendar_event_created" not in {r["action"] for r in result["actions"]}
+
+
+async def test_approval_gate_geocodes_location(tmp_path: Path) -> None:
+    result = await run_gate_scenario(
+        tmp_path,
+        verdict="approved",
+        function_call=("add_calendar_event", {
+            "title": "Dentist",
+            "start": "2026-11-24T14:00",
+            "end": "2026-11-24T15:00",
+            "location": "Strada Bradului 57, Bacau",
+        }),
+    )
+
+    assert result["events"][0]["location"].endswith("(validated)"), (
+        "the raw location must be canonicalized by geocoding before the card"
+    )
