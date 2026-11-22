@@ -32,7 +32,7 @@ uv sync
 # 1. Gemini API key for the agent models (or GOOGLE_CLOUD_* for Vertex)
 $EDITOR .env            # set GEMINI_API_KEY=...
 
-# 2. Secrets into macOS Keychain
+# 2. Secrets into the project .env (git-ignored; Keychain is the fallback)
 uv run python -m app.cli set-secret TELEGRAM_BOT_TOKEN   # BotFather token
 uv run python -m app.cli set-secret GMAIL_ADDRESS
 uv run python -m app.cli set-secret GMAIL_APP_PASSWORD   # needs Google 2FA, see ADR-002

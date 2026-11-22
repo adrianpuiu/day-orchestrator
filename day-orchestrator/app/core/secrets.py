@@ -1,7 +1,8 @@
-"""Secret store: macOS Keychain first, .env fallback, never logs values (C8).
+"""Secret store: git-ignored .env is canonical, Keychain fallback (C8).
 
-Lifted interface from the long-horizon-harness recipe: a small backend protocol
-so tests use an in-memory store and the model never sees a secret — only names.
+Owner decision 2026-11-22: credentials live in `.env` (never committed) so
+they are visible and migratable; Keychain remains a fallback for setups that
+prefer it. Precedence order below IS the contract — do not reorder casually.
 """
 
 from __future__ import annotations
@@ -85,6 +86,10 @@ class Secrets:
                 return value
         return os.environ.get(name)
 
+    def set(self, name: str, value: str) -> None:
+        """Writes the canonical (first) backend; later backends are fallbacks."""
+        self._backends[0].set(name, value)
+
     def require(self, name: str) -> str:
         value = self.get(name)
         if not value:
@@ -95,4 +100,4 @@ class Secrets:
 
 
 def default_secrets(project_root: Path) -> Secrets:
-    return Secrets(KeychainBackend(), EnvFileBackend(project_root / ".env"))
+    return Secrets(EnvFileBackend(project_root / ".env"), KeychainBackend())

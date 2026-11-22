@@ -7,20 +7,21 @@ import asyncio
 import getpass
 from pathlib import Path
 
-from .core.config import Config
+from .core.config import PROJECT_ROOT, Config
+from .core.secrets import default_secrets
 
 KNOWN_SECRETS = {
     "TELEGRAM_BOT_TOKEN": "BotFather token (pair via /start after first run)",
     "GMAIL_ADDRESS": "the Gmail address to manage",
     "GMAIL_APP_PASSWORD": "Google app password — needs 2FA (docs/adr/ADR-002)",
-}
+}  # stored in the project .env (git-ignored), Keychain as fallback
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="day-orchestrator")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_secret = sub.add_parser("set-secret", help="store a secret in macOS Keychain")
+    p_secret = sub.add_parser("set-secret", help="store a secret in the .env file")
     p_secret.add_argument("name", choices=sorted(KNOWN_SECRETS))
 
     sub.add_parser("secrets", help="list known secret names")
@@ -41,10 +42,8 @@ def main() -> None:
         value = getpass.getpass(f"value for {args.name}: ")
         if not value:
             raise SystemExit("empty value")
-        from .core.secrets import KeychainBackend
-
-        KeychainBackend().set(args.name, value)
-        print(f"stored {args.name} in Keychain.")
+        default_secrets(PROJECT_ROOT).set(args.name, value)
+        print(f"stored {args.name} in {PROJECT_ROOT / '.env'} (git-ignored).")
     elif args.cmd == "auth-calendar":
         cfg = Config.load()
         from .channels.calendar import CalendarClient

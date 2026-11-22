@@ -40,7 +40,7 @@ At most four critical: auditability, privacy, timeliness, reliability.
 5. **Deterministic shell, LLM core.** Triggers, scheduling, and adapters are plain Python with no LLM calls. LLM executes only inside ADK agent/workflow steps with bounded, minimized inputs. → testability, affordability, predictability.
 6. **Domain-partitioned modules + typed in-process event bus.** Modules: `gmail`, `telegram`, `calendar`, `planner`, `triage`, `tasks`, `approval`, `memory`, `scheduler`, `orchestrator`. Cross-module communication via typed events on an in-process bus; adapters never call adapters; each module owns its tables. → extensibility, evolvability (a later Docker split is per-module), testability.
 7. **Idempotent catch-up scheduling.** Every scheduled effect carries a dedup key (`brief-2026-11-22-morning`). Missed ticks run **once** on wake, never N times; reminders and pending approvals survive restarts. → reliability, timeliness.
-8. **Secrets in macOS Keychain** (git-ignored `.env` as fallback): Gmail credential, Telegram bot token, OAuth tokens. Never in DB, logs, or prompts. → security, privacy.
+8. **Secrets in the git-ignored `.env`** (macOS Keychain as fallback): Gmail credential, Telegram bot token, OAuth tokens. Never hardcoded in committed code, in the DB, logs, or prompts. → security, privacy.
 9. **Content minimization at the LLM boundary.** Triage sees subject + snippet; full body only on demand or when drafting. Nothing is persisted to third-party services beyond the model provider. → privacy, affordability.
 10. **Notification budget.** Proactive messages are capped per category per day (configurable). A proactive-first agent fails by nagging; silence is a feature. → timeliness includes not over-notifying.
 
@@ -65,8 +65,8 @@ At most four critical: auditability, privacy, timeliness, reliability.
 | SMTP | stdlib `smtplib`, STARTTLS 587 | sends only via approval-gated path |
 | Calendar | Google Calendar API, scope `calendar.readonly` | write access = future ADR |
 | Persistence | SQLite (stdlib + ADK `DatabaseSessionService`) | one file, WAL |
-| Scheduling | APScheduler + SQLite jobstore, wrapped by launchd `KeepAlive` | catch-up on wake (C7) |
-| Secrets | macOS Keychain (`security` CLI) | .env fallback |
+| Scheduling | APScheduler (in-memory store), launchd `KeepAlive` | catch-up on wake (C7); effects re-derived per boot |
+| Secrets | project `.env` (git-ignored), Keychain fallback | `app/core/secrets.py` |
 | Models | Gemini via ADK; flash-class for triage batches, stronger for planning | config-driven per agent |
 
 ### System context (C4 level 1)
@@ -168,7 +168,7 @@ flowchart LR
 - ADR-002 — Email transport IMAP/SMTP (owner-mandated) incl. auth sub-decision: app password vs XOAUTH2.
 - ADR-003 — ADK Python + `DatabaseSessionService` on SQLite.
 - ADR-004 — Approval gate: DB state machine + Telegram inline keyboard, never free-text authorization.
-- ADR-005 — Scheduling: APScheduler + SQLite jobstore + launchd wrapper, idempotent catch-up.
+- ADR-005 — Scheduling: APScheduler (in-memory store; effects re-derived per boot) + launchd wrapper, idempotent catch-up.
 - ADR-006 — Telegram long polling (no webhook) as the only user channel.
 
 **Enforcement gates (CI)**:
