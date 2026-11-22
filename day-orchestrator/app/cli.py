@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
+from datetime import datetime
 from pathlib import Path
 
 from .core.config import PROJECT_ROOT, Config
@@ -31,6 +32,7 @@ def main() -> None:
                         help="path to Google OAuth client secret JSON")
 
     sub.add_parser("run", help="run the orchestrator (foreground; launchd wraps it)")
+    sub.add_parser("eval-nightly", help="run live agent evals; alert Telegram on failure")
     sub.add_parser("smoke", help="offline proof of the approval gate")
 
     args = parser.parse_args()
@@ -63,6 +65,60 @@ def main() -> None:
         from .runtime import Runtime
 
         asyncio.run(Runtime().start())
+    elif args.cmd == "eval-nightly":
+        import logging
+        import os
+        import subprocess
+        import sys
+
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+        log = logging.getLogger("eval-nightly")
+        data_dir = Config.load().data_dir
+        log_path = data_dir / "logs" / "evals.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        env = {**os.environ, "RUN_LIVE": "1"}
+        with log_path.open("a", encoding="utf-8") as log_file:
+            log_file.write(f"=== {datetime.now().isoformat(timespec='seconds')} nightly evals ===\n")
+            log_file.flush()
+            proc = subprocess.run(
+                [sys.executable, "-m", "pytest", "tests/eval", "-q"],
+                stdout=log_file, stderr=subprocess.STDOUT, env=env, cwd=PROJECT_ROOT,
+            )
+        if proc.returncode == 0:
+            log.info("nightly evals PASS")
+            return
+        log.error("nightly evals FAILED — alerting owner")
+        tail = log_path.read_text(encoding="utf-8")[-1500:].replace("\n", " ")
+        token = default_secrets(PROJECT_ROOT).get("TELEGRAM_BOT_TOKEN")
+        row = None
+        try:
+            from .core.db import Database
+
+            db = Database(Config.load().db_path)
+            row = db.query_one(
+                "SELECT value FROM memory WHERE key='paired_chat'"
+            )
+            db.close()
+        except Exception:
+            log.warning("could not read paired chat", exc_info=True)
+        chat = row["value"] if row else None
+        if token and chat:
+            import html as _html
+
+            import httpx
+
+            httpx.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data={
+                    "chat_id": str(chat),
+                    "parse_mode": "HTML",
+                    "text": "🌙 Nightly evals FAILED — model behavior may have "
+                    f"drifted.<pre>{_html.escape(tail)}</pre>",
+                },
+                timeout=15,
+            )
+            log.info("failure alert sent to chat %s", chat)
     elif args.cmd == "smoke":
         from .smoke import run_smoke
 

@@ -121,6 +121,10 @@ async def test_coordinator_adds_task_via_tool(runtime: Runtime) -> None:
     assert rows, "coordinator did not create the task"
     due = rows[0].get("due") or ""
     assert "14:00" in due, f"task due lost the time: {due!r}"
+    bucket = tasks.bucket(rows[0], tasks.local_today(rt.cfg.timezone), rt.cfg.timezone)
+    assert bucket == "tomorrow", (
+        f"'tomorrow' resolved to the wrong date: due={due!r} bucket={bucket!r}"
+    )
 
 
 async def test_coordinator_email_goes_through_gate(runtime: Runtime) -> None:
@@ -134,3 +138,90 @@ async def test_coordinator_email_goes_through_gate(runtime: Runtime) -> None:
     approvals = approval.list_pending(rt.db)
     assert approvals, "send_email must pause behind an approval row"
     assert rt.gmail.sent == [], "nothing may send without approval"
+
+
+# --- brief readability: same local model judges against a fixed rubric --------
+
+async def test_brief_readability_judge(runtime: Runtime) -> None:
+    """ds41 grades its own brief on a fixed rubric (self-judge bias is known —
+    the value is drift detection: if brief quality collapses, this fails)."""
+
+    from openai import AsyncOpenAI
+
+    rt = runtime
+    rt.gmail.msgs = [
+        make_email("1", "Invoice overdue", "Pay invoice #4471 today."),
+        make_email("2", "Team offsite notes", "Notes from yesterday's offsite."),
+    ]
+    tasks.add(rt.db, "Pay invoice #4471", due="2026-11-22T14:00")
+    await rt.run_briefing("eval-judge")
+    brief = "\n".join(rt.notifier.messages)
+    assert brief.strip(), "no brief was produced to judge"
+
+    client = AsyncOpenAI(base_url=rt.cfg.model_api_base, api_key=rt.cfg.model_api_key)
+    judge = await client.chat.completions.create(
+        model=rt.cfg.coordinator_model,
+        messages=[
+            {"role": "system", "content":
+                "You are a strict judge of daily briefs written for a busy owner. "
+                "Grade the brief below on three axes, 0-5 each: grounding (every "
+                "claim traceable to the inputs), conciseness (<=250 words, no "
+                "fluff), actionability (owner knows exactly what to do today). "
+                "Respond ONLY with JSON: {\"grounding\": n, \"conciseness\": n, "
+                "\"actionability\": n, \"reason\": \"one sentence\"}"},
+            {"role": "user", "content": f"Inputs the brief was built from:\n"
+             "emails: invoice #4471 overdue; team offsite notes.\n"
+             "tasks: 'Pay invoice #4471' due 14:00 today.\n"
+             f"\nBrief to judge:\n{brief}"},
+        ],
+        temperature=0,
+        max_tokens=300,
+    )
+    raw = judge.choices[0].message.content or "{}"
+    from app.workflows.pipelines import _extract_json
+
+    verdict = _extract_json(raw)
+    avg = (verdict.get("grounding", 0) + verdict.get("conciseness", 0)
+           + verdict.get("actionability", 0)) / 3
+    assert avg >= 3.5, (
+        f"brief quality below bar (avg {avg:.1f}/5): {verdict.get('reason')!r}\n{brief[:400]}"
+    )
+
+
+# --- multi-turn: session continuity + tool use across turns --------------------
+
+async def test_coordinator_multi_turn(runtime: Runtime) -> None:
+    rt = runtime
+    memory.set_value(rt.db, "paired_chat", 42)
+    replies: list[str] = []
+    orig = rt.notifier.send
+
+    async def tee(text: str, category: str) -> dict:
+        result = await orig(text, category)
+        replies.append(text)
+        return result
+
+    rt.notifier.send = tee
+    rt.deps.notifier.send = tee
+    orig_sm = rt.telegram.send_message
+
+    async def tee_sm(text: str, category: str, reply_markup=None) -> dict:
+        result = await orig_sm(text, category, reply_markup)
+        replies.append(text)  # coordinator replies go through send_message
+        return result
+
+    rt.telegram.send_message = tee_sm
+
+    async def say(text: str, mid: int) -> None:
+        await rt.bus.publish(
+            Event(TELEGRAM_COMMAND, {"text": text, "chat_id": 42, "message_id": mid})
+        )
+
+    await say("add task buy milk tomorrow at 14:00", 1)
+    assert tasks.list_open(rt.db), "turn 1: task not created"
+    await say("what are my open tasks?", 2)
+    assert replies and "milk" in replies[-1].lower(), (
+        f"turn 2: answer lost session context: {replies[-1:]!r}"
+    )
+    await say("mark the milk task as done", 3)
+    assert tasks.list_open(rt.db) == [], "turn 3: task not completed"

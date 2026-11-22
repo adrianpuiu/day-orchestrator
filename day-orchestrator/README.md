@@ -72,10 +72,12 @@ uv run pytest -q            # 43 tests: gate, bus, stores, adapters (fakes), gat
 uv run lint-imports         # layer + channel-independence contracts (ADR-006)
 uv run ruff check .
 uv run python -m app.smoke  # prints the offline approval-gate proof
-RUN_LIVE=1 uv run pytest tests/eval -q   # agent evals on the configured model:
+RUN_LIVE=1 uv run pytest tests/eval -q   # agent evals on the configured model (9):
 #   triage judgment (OTP=low, invoice=urgent, meeting=needs_reply), brief
-#   structure (sections, carry-over format, no invented times), coordinator
-#   tool routing (task add via tool, email always pauses behind the gate)
+#   structure (sections, carry-over format, no invented times), rubric-judged
+#   readability, multi-turn session continuity, coordinator tool routing
+#   (task add via tool with correct date resolution, email always pauses
+#   behind the gate). Nightly at 03:30 via launchd; Telegram alert on failure.
 ```
 
 ## Trust boundary

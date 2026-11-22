@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- Nightly agent evals (03:30 local) — drift detection for the local model.
+     Install alongside the main agent:
+       cp ops/launchd/com.agp.day-orchestrator.evals.plist ~/Library/LaunchAgents/
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agp.day-orchestrator.evals.plist
+     Log: ~/Library/Application Support/day-orchestrator/logs/evals.log
+-->
+<dict>
+    <key>Label</key>
+    <string>com.agp.day-orchestrator.evals</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/agp/.local/bin/uv</string>
+        <string>run</string>
+        <string>--directory</string>
+        <string>/Users/agp/Desktop/google-adk/day-orchestrator</string>
+        <string>python</string>
+        <string>-m</string>
+        <string>app.cli</string>
+        <string>eval-nightly</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/agp/Library/Application Support/day-orchestrator/logs/evals.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/agp/Library/Application Support/day-orchestrator/logs/evals.log</string>
+</dict>
+</plist>

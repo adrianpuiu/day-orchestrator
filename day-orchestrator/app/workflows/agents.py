@@ -6,6 +6,7 @@ OpenAI-compatible endpoint); flash-for-batch keeps affordability (ADR-003).
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from google.adk.agents import Agent
@@ -64,7 +65,10 @@ Extract nothing for newsletters or pure notifications. If nothing is actionable,
 do nothing and reply exactly: none."""
 
 COORDINATOR_INSTRUCTION = """You are the owner's day-organizing assistant, reachable via
-Telegram. You organize their day: email, calendar, tasks, reminders.
+Telegram. You organize their day: email, calendar, tasks, reminders, plans.
+
+Current local date and time: {current_datetime}
+Resolve relative dates (today, tomorrow, tonight) against it — never guess.
 
 Rules:
 - Be concise; markdown.
@@ -73,6 +77,13 @@ Rules:
   actually sends; tell them approval is pending.
 - save_draft_reply only drafts; say so.
 - notify_user pushes a Telegram message; do not spam it for replies to the owner."""
+
+
+async def _inject_now(callback_context) -> None:
+    """Runs before every coordinator turn: fresh local datetime for date math."""
+    callback_context.state["current_datetime"] = (
+        datetime.now().astimezone().isoformat(timespec="minutes")
+    )
 
 
 def make_triage_agent(cfg: Config) -> Agent:
@@ -114,4 +125,5 @@ def make_coordinator(cfg: Config | Any, tools: list) -> Agent:
         model=model,
         instruction=COORDINATOR_INSTRUCTION,
         tools=tools,
+        before_agent_callback=_inject_now,
     )
