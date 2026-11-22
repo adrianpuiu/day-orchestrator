@@ -21,7 +21,7 @@ from google.adk.tools import FunctionTool, ToolContext
 from .core import actionlog, approval, budget, tasks
 from .core.approval import ApprovalPending
 from .core.db import Database
-from .core.textfmt import escape_html
+from .core.textfmt import escape_html, markdown_to_telegram_html
 
 log = logging.getLogger(__name__)
 
@@ -206,7 +206,12 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
                 detail={"category": category},
             )
             return {"status": "suppressed", "reason": "daily budget exhausted"}
-        result = await deps.notifier.send(text, category)
+        # The notifier sends Telegram HTML; convert the declared markdown and
+        # escape everything else so LLM output can never inject markup or
+        # raw links (prompt injection arrives via email bodies).
+        result = await deps.notifier.send(
+            markdown_to_telegram_html(text), category
+        )
         return {"status": "success", "message_id": result.get("message_id")}
 
     # ---- approval-gated effect path (ADR-004): email + calendar writes ----
