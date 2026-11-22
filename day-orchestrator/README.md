@@ -7,10 +7,43 @@ calendar writes are approval-gated via Telegram and audited in SQLite.
 Docs: [`../docs/architecture.md`](../docs/architecture.md) (constraint set) ·
 [`docs/adr/`](docs/adr/) (ADR-001…010).
 
-## Quick start (macOS, ~5 minutes)
+## Why we built it
+
+Two problems, one inverted trust model.
+
+**The morning scramble.** Overnight email, a calendar that lives on the phone,
+tasks scattered across notes. We wanted one 07:00 Telegram brief that merges
+the triaged inbox into concrete tasks, the day's calendar into a schedule, and
+a short plan — written by an agent that reads the mail but is not allowed to
+act on it.
+
+**Assistants you can't trust.** Cloud assistants read your mail and act with
+no receipt. Day Orchestrator inverts that: it runs **on your Mac**
+(outbound-only networking, no public endpoints), keeps everything in **one
+auditable SQLite file**, and **cannot send an email or write a calendar event
+without you tapping Approve** in Telegram. Every transition lands in an
+append-only action log; an at-most-once latch makes double-apply impossible;
+identical duplicate requests collapse onto a single approval card; a failed
+action after approval pushes an explicit ❌ instead of failing silently.
+
+Design rules that followed (full reasoning in
+[`../docs/architecture.md`](../docs/architecture.md), decisions in
+`docs/adr/`):
+
+- One process, one machine, outbound-only networking — nothing exposed to break in.
+- The LLM runs only inside agent steps; adapters and the approval gate are
+  deterministic code.
+- Calendar reads and writes go through Apple EventKit inside a proper
+  `.app` bundle (the TCC identity Apple requires) — no OAuth, your
+  credentials never leave the machine; geocoding uses Apple Maps under the
+  same identity.
+- The gate is the product: pause → card → Approve/Reject/Edit → at-most-once
+  apply → explicit ❌ on failure.
+
+## Install (macOS, ~5 minutes)
 
 ```bash
-git clone <this-repo> && cd day-orchestrator
+git clone https://github.com/adrianpuiu/day-orchestrator.git && cd day-orchestrator
 curl -LsSf https://astral.sh/uv/install.sh | sh   # if uv is missing
 uv run python -m app.cli install
 ```
