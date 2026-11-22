@@ -258,8 +258,11 @@ class Runtime:
             )
             notes = str(p.get("notes") or "")
             invitees = p.get("invitees") or []
+            location = str(p.get("location") or "")
             if notes:
                 summary += f"\n{escape_html(notes[:200])}"
+            if location:
+                summary += f"\nWhere: {escape_html(location)}"
             if invitees:
                 summary += f"\nAttendees: {escape_html(', '.join(map(str, invitees)))}"
             alarm = int(p.get("alarm_minutes") or 0)

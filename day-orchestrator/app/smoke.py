@@ -117,12 +117,13 @@ class FakeCalendar:
 
     def create_event(self, title: str, start: str, end: str,
                      notes: str = "", invitees: list[str] | None = None,
-                     alarm_minutes: int = 0) -> str:
+                     alarm_minutes: int = 0, location: str = "") -> str:
         event_id = f"ek-{len(self.events) + 1}"
         self.events.append({"id": event_id, "title": title, "start": start,
                             "end": end, "notes": notes,
                             "invitees": invitees or [],
-                            "alarm_minutes": alarm_minutes})
+                            "alarm_minutes": alarm_minutes,
+                            "location": location})
         return event_id
 
     def get_event_meta(self, event_id: str) -> dict | None:

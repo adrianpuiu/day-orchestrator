@@ -46,6 +46,7 @@ def main() -> None:
         "--alarm-minutes", type=int, default=0,
         help="fire an alert N minutes before the event (0 = no alarm)",
     )
+    p_create.add_argument("--location", default="")
     sub.add_parser("status")
     p_upd = sub.add_parser("update-event")
     p_upd.add_argument("--id", required=True)
@@ -220,6 +221,8 @@ def main() -> None:
     )
     event.setEndDate_(EK_NSDATE_from(datetime.fromisoformat(args.end).astimezone()))
     event.setCalendar_(calendar)
+    if args.location:
+        event.setLocation_(args.location)
     if args.alarm_minutes > 0:
         event.addAlarm_(
             EK.EKAlarm.alarmWithRelativeOffset_(-args.alarm_minutes * 60.0)

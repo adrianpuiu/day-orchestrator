@@ -67,6 +67,7 @@ class AppleCalendarClient:
         invitees: list[str] | None = None,
         alarm_minutes: int = 0,
         recurrence: str = "",
+        location: str = "",
     ) -> str:
         """Write: create an event in the default calendar; returns its id.
 
@@ -86,6 +87,8 @@ class AppleCalendarClient:
             args += ["--notes", notes]
         if invitees:
             args += ["--invitees", ",".join(invitees)]
+        if location:
+            args += ["--location", location]
         data = self._run(args)
         return str(data["event_id"])
 
