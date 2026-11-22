@@ -20,6 +20,7 @@ from google.adk.tools import FunctionTool, ToolContext
 from .core import actionlog, approval, budget, tasks
 from .core.approval import ApprovalPending
 from .core.db import Database
+from .core.textfmt import escape_html
 
 log = logging.getLogger(__name__)
 
@@ -259,12 +260,30 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
                           detail={"state": row.state})
             return {"status": "rejected", "approval_id": approval_id}
 
+        # At-most-once latch: an approved row must never send twice, no matter
+        # how many times the run resumes.
+        if not actionlog.claim(deps.db, f"send:{approval_id}", "gate"):
+            return {"status": "already_sent", "approval_id": approval_id}
+
         # Owner may have edited the draft while the run was paused (ADR-004 Edit).
         final = dict(row.payload)
-        deps.gmail.send_email(
-            to=final["to"], subject=final["subject"], body=final["body"],
-            in_reply_to=final.get("in_reply_to"),
-        )
+        try:
+            deps.gmail.send_email(
+                to=final["to"], subject=final["subject"], body=final["body"],
+                in_reply_to=final.get("in_reply_to"),
+            )
+        except Exception:
+            log.exception("approved send failed (approval %s)", row.id)
+            actionlog.log(deps.db, "gate", "send_failed", "send", approval_id=row.id)
+            try:
+                await deps.notifier.send(
+                    f"❌ Approved email to {escape_html(str(final['to']))} failed "
+                    "to send — check logs. It will NOT be retried automatically.",
+                    "triage_alerts",
+                )
+            except Exception:
+                log.exception("send-failure notify also failed")
+            return {"status": "send_failed", "approval_id": row.id}
         actionlog.log(
             deps.db, "gate", "email_sent", "send", approval_id=row.id,
             detail={"to": final["to"], "subject": final["subject"]},

@@ -36,6 +36,33 @@ _CALLBACK_RE = re.compile(
 )
 
 
+def split_message(text: str, limit: int = 4000) -> list[str]:
+    """Splits at line boundaries under Telegram's 4096-char cap; huge lines hard-cut.
+
+    Sections are self-contained blocks, so a line-boundary split never breaks an
+    HTML tag in practice.
+    """
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    for part in text.splitlines(keepends=True):
+        while len(part) > limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(part[:limit])
+            part = part[limit:]
+        if len(current) + len(part) > limit:
+            chunks.append(current)
+            current = part
+        else:
+            current += part
+    if current:
+        chunks.append(current)
+    return chunks or [text]
+
+
 class TelegramChannel:
     """Bridge Telegram Bot API traffic onto the core event bus."""
 
@@ -157,14 +184,21 @@ class TelegramChannel:
         category: str,
         reply_markup: InlineKeyboardMarkup | None = None,
     ) -> dict[str, Any]:
-        """Send a Telegram-HTML notification to the paired chat (NotifierProto)."""
-        chat_id = self._target_chat_id()
-        message = await self._bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=reply_markup,
-        )
+        """Send a Telegram-HTML notification to the paired chat (NotifierProto).
+
+        Chunks at line boundaries under the 4096-char API cap; the keyboard, if
+        any, rides on the last chunk.
+        """
+        chunks = split_message(text)
+        message = None
+        for i, chunk in enumerate(chunks):
+            markup = reply_markup if i == len(chunks) - 1 else None
+            message = await self._bot.send_message(
+                chat_id=self._target_chat_id(),
+                text=chunk,
+                parse_mode="HTML",
+                reply_markup=markup,
+            )
         return {"message_id": message.message_id, "chat_id": message.chat.id}
 
     async def send_approval_card(self, approval_id: str, summary_text: str) -> int:

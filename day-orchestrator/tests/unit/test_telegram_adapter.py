@@ -231,3 +231,28 @@ async def test_start_drops_webhook_and_stop_closes_session(
     assert bot.closed
 
 
+
+
+def test_split_message_chunks_under_api_cap() -> None:
+    from app.channels.telegram import split_message
+
+    assert split_message("short") == ["short"]
+    long_text = "\n".join(f"line {i} — some words here" for i in range(300))
+    chunks = split_message(long_text)
+    assert len(chunks) > 1
+    assert all(len(c) <= 4000 for c in chunks)
+    assert "".join(chunks) == long_text  # chunking moves boundaries, drops nothing
+    huge_line = "x" * 9500
+    parts = split_message(huge_line)
+    assert len(parts) == 3 and all(len(p) <= 4000 for p in parts)
+
+
+async def test_send_message_chunks_long_brief(
+    bus: EventBus, channel: TelegramChannel
+) -> None:
+    bot = channel._bot
+    assert isinstance(bot, FakeBot)
+    await channel.send_message("word " * 1200, "briefing")  # ~7200 chars
+    assert len(bot.sent) >= 2
+    assert all(len(s["text"]) <= 4000 for s in bot.sent)
+    assert bot.sent[0]["reply_markup"] is None  # keyboard rides the last chunk

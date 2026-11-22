@@ -11,6 +11,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 from google.adk.apps import App, ResumabilityConfig
 from google.adk.runners import Runner
@@ -41,6 +42,25 @@ from .workflows.agents import make_coordinator
 log = logging.getLogger(__name__)
 
 APP_NAME = "app"
+
+
+def _acquire_instance_lock(data_dir: Path, blocking: bool = False):
+    """Non-blocking by default; returns the open lock file or None if held.
+
+    A second instance parks on the blocking acquire instead of exiting, so
+    launchd KeepAlive never thrashes while the primary is healthy.
+    """
+    import fcntl
+
+    fh = (data_dir / ".lock").open("w")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | (fcntl.LOCK_NB if not blocking else 0))
+    except BlockingIOError:
+        fh.close()
+        return None
+    fh.write(str(__import__("os").getpid()))
+    fh.flush()
+    return fh
 
 
 class NullNotifier:
@@ -129,6 +149,13 @@ class Runtime:
         self.bus.subscribe(REMINDER_DUE, self.on_reminder)
 
     async def start(self) -> None:
+        lock = _acquire_instance_lock(self.cfg.data_dir)
+        if lock is None:
+            log.warning(
+                "another instance holds the lock; parking until it exits"
+            )
+            lock = _acquire_instance_lock(self.cfg.data_dir, blocking=True)
+        self._lock_file = lock
         self.subscribe()
         self.loop = asyncio.get_running_loop()
         self.scheduler.ensure_daily("brief", self.cfg.brief_time)
@@ -156,6 +183,11 @@ class Runtime:
             await self.telegram.stop()
         await self.scheduler.stop()
         self.db.close()
+        if getattr(self, "_lock_file", None) is not None:
+            import fcntl
+
+            fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+            self._lock_file.close()
         log.info("runtime stopped")
 
     def request_stop(self) -> None:
@@ -228,6 +260,17 @@ class Runtime:
             log.exception("briefing failed (%s) — gap is visible in action log", dedup_key)
             actionlog.log(self.db, "pipeline", "brief_failed", "system",
                           detail={"dedup_key": dedup_key})
+            try:
+                # the failed run never consumed its budget slot — use it to tell you
+                if budget.allow(self.db, "briefing",
+                                self.cfg.budgets.get("briefing", 1), self.cfg.timezone):
+                    await self.notifier.send(
+                        "⚠️ Morning brief failed to run — check "
+                        "~/Library/Application Support/day-orchestrator/logs",
+                        "briefing",
+                    )
+            except Exception:
+                log.exception("brief-failure notify also failed")
 
     async def run_sweep(self, dedup_key: str) -> None:
         if not actionlog.claim(self.db, dedup_key, "scheduler"):
