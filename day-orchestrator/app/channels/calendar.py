@@ -118,6 +118,10 @@ class CalendarClient:
             self._authenticate()
         return self._service
 
+    def access_status(self) -> int:
+        """Passive: OAuth consent is established at setup, so always authorized."""
+        return 3
+
     def get_events(self, days: int) -> list[dict[str, Any]]:
         """Return primary-calendar events from now through now + days."""
         now = datetime.now().astimezone()
