@@ -31,3 +31,37 @@ async def test_approval_gate_reject_never_sends(tmp_path: Path) -> None:
     actions = {row["action"] for row in result["actions"]}
     assert "send_rejected" in actions
     assert "email_sent" not in actions
+
+
+async def test_approval_gate_calendar_write(tmp_path: Path) -> None:
+    result = await run_gate_scenario(
+        tmp_path,
+        verdict="approved",
+        function_call=("add_calendar_event", {
+            "title": "Plată factură curent",
+            "start": "2026-11-23T10:30",
+            "end": "2026-11-23T11:00",
+        }),
+    )
+
+    assert result["approval_state"] == "approved"
+    assert result["events"], "approved calendar write must create the event"
+    assert result["events"][0]["title"] == "Plată factură curent"
+
+    actions = {row["action"] for row in result["actions"]}
+    assert "calendar_event_created" in actions
+    assert "email_sent" not in actions
+
+
+async def test_approval_gate_calendar_reject_never_writes(tmp_path: Path) -> None:
+    result = await run_gate_scenario(
+        tmp_path,
+        verdict="rejected",
+        function_call=("add_calendar_event", {
+            "title": "Dinner", "start": "2026-11-24T19:00", "end": "2026-11-24T21:00",
+        }),
+    )
+
+    assert result["approval_state"] == "rejected"
+    assert result["events"] == [], "rejected calendar write must never happen"
+    assert "calendar_event_created" not in {r["action"] for r in result["actions"]}

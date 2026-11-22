@@ -75,6 +75,9 @@ Rules:
 - Use the read tools to answer questions about email, calendar, and tasks.
 - To send an email, use send_email — the owner approves in Telegram before it
   actually sends; tell them approval is pending.
+- To put something on the owner's calendar, use add_calendar_event — also
+  approval-gated; use it when they explicitly ask for an event in the
+  calendar (tasks stay tasks — add_task does not touch the calendar).
 - save_draft_reply only drafts; say so.
 - notify_user pushes a Telegram message; do not spam it for replies to the owner."""
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
@@ -72,6 +72,8 @@ class ToolDeps:
     timezone: str = "local"
     # Composition-root injected: async (Approval) -> telegram message id.
     card_sender: Any = None
+    # Apple backend only: async-safe object with create_event(title, start, end).
+    calendar_writer: Any = None
 
 
 def make_tools(deps: ToolDeps) -> list[FunctionTool]:
@@ -193,37 +195,28 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         result = await deps.notifier.send(text, category)
         return {"status": "success", "message_id": result.get("message_id")}
 
-    # ---- send tool: the single approval-gated path (ADR-004) ----
+    # ---- approval-gated effect path (ADR-004): email + calendar writes ----
 
-    @effect(Effect.SEND)
-    async def send_email(
+    async def _gated(
         tool_context: ToolContext,
-        to: str,
-        subject: str,
-        body: str,
-        in_reply_to: str | None = None,
+        kind: str,
+        payload: dict[str, Any],
+        hint: str,
+        execute: Callable[[approval.Approval], Awaitable[dict[str, Any]]],
     ) -> dict[str, Any]:
-        """Sends an email. REQUIRES owner approval via Telegram before sending.
+        """Shared approval flow: pause on first run, act on approved resume.
 
-        The run pauses until the owner approves or rejects in Telegram.
-
-        Args:
-            to: Recipient address.
-            subject: Subject line.
-            body: Plain-text body.
-            in_reply_to: Optional Message-ID being replied to.
+        `execute` runs the real effect only after the gate resolves approved,
+        behind an at-most-once latch (ADR-004).
         """
         state_key = f"appr:{tool_context.function_call_id}"
         approval_id = tool_context.state.get(state_key)
 
         if tool_context.tool_confirmation is None:
             # First execution: create the approval row and pause the run.
-            payload = {
-                "to": to, "subject": subject, "body": body, "in_reply_to": in_reply_to,
-            }
             ic = tool_context.get_invocation_context()
             session_ref = json.dumps({"user_id": ic.user_id, "session_id": ic.session.id})
-            row = approval.create(deps.db, "send_email", payload,
+            row = approval.create(deps.db, kind, payload,
                                   session_ref=session_ref)
             tool_context.state[state_key] = row.id
             if deps.card_sender is not None:
@@ -232,10 +225,7 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
                     approval.attach_telegram_message(deps.db, row.id, message_id)
                 except Exception:
                     log.exception("failed to send approval card; gate stays in DB")
-            tool_context.request_confirmation(
-                hint=f"Send email to {to}?",
-                payload={"approval_id": row.id},
-            )
+            tool_context.request_confirmation(hint=hint, payload={"approval_id": row.id})
             return {
                 "status": "awaiting_approval",
                 "approval_id": row.id,
@@ -265,30 +255,95 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         if not actionlog.claim(deps.db, f"send:{approval_id}", "gate"):
             return {"status": "already_sent", "approval_id": approval_id}
 
-        # Owner may have edited the draft while the run was paused (ADR-004 Edit).
-        final = dict(row.payload)
+        # The row's payload is authoritative: the owner may have edited the
+        # draft while the run was paused (ADR-004 Edit).
         try:
-            deps.gmail.send_email(
-                to=final["to"], subject=final["subject"], body=final["body"],
-                in_reply_to=final.get("in_reply_to"),
-            )
+            return await execute(row)
         except Exception:
-            log.exception("approved send failed (approval %s)", row.id)
+            log.exception("approved effect failed (approval %s)", row.id)
             actionlog.log(deps.db, "gate", "send_failed", "send", approval_id=row.id)
             try:
                 await deps.notifier.send(
-                    f"❌ Approved email to {escape_html(str(final['to']))} failed "
-                    "to send — check logs. It will NOT be retried automatically.",
+                    f"❌ Approved action ({escape_html(row.kind)}) failed "
+                    "— check logs. It will NOT be retried automatically.",
                     "triage_alerts",
                 )
             except Exception:
                 log.exception("send-failure notify also failed")
             return {"status": "send_failed", "approval_id": row.id}
-        actionlog.log(
-            deps.db, "gate", "email_sent", "send", approval_id=row.id,
-            detail={"to": final["to"], "subject": final["subject"]},
+
+    @effect(Effect.SEND)
+    async def send_email(
+        tool_context: ToolContext,
+        to: str,
+        subject: str,
+        body: str,
+        in_reply_to: str | None = None,
+    ) -> dict[str, Any]:
+        """Sends an email. REQUIRES owner approval via Telegram before sending.
+
+        The run pauses until the owner approves or rejects in Telegram.
+
+        Args:
+            to: Recipient address.
+            subject: Subject line.
+            body: Plain-text body.
+            in_reply_to: Optional Message-ID being replied to.
+        """
+
+        async def execute(row: approval.Approval) -> dict[str, Any]:
+            final = dict(row.payload)
+            deps.gmail.send_email(
+                to=final["to"], subject=final["subject"], body=final["body"],
+                in_reply_to=final.get("in_reply_to"),
+            )
+            actionlog.log(
+                deps.db, "gate", "email_sent", "send", approval_id=row.id,
+                detail={"to": final["to"], "subject": final["subject"]},
+            )
+            return {"status": "sent", "approval_id": row.id}
+
+        payload = {
+            "to": to, "subject": subject, "body": body, "in_reply_to": in_reply_to,
+        }
+        return await _gated(
+            tool_context, "send_email", payload, hint=f"Send email to {to}?",
+            execute=execute,
         )
-        return {"status": "sent", "approval_id": row.id}
+
+    @effect(Effect.SEND)
+    async def add_calendar_event(
+        tool_context: ToolContext,
+        title: str,
+        start: str,
+        end: str,
+    ) -> dict[str, Any]:
+        """Creates an event in the owner's Apple Calendar (syncs to iPhone).
+        REQUIRES owner approval via Telegram before writing.
+
+        Args:
+            title: Event title.
+            start: ISO datetime, e.g. 2026-11-23T10:30.
+            end: ISO datetime for the event end.
+        """
+
+        async def execute(row: approval.Approval) -> dict[str, Any]:
+            final = dict(row.payload)
+            event_id = deps.calendar_writer.create_event(
+                final["title"], final["start"], final["end"],
+            )
+            actionlog.log(
+                deps.db, "gate", "calendar_event_created", "send", approval_id=row.id,
+                detail=final,
+            )
+            return {"status": "created", "event_id": event_id, "approval_id": row.id}
+
+        payload = {"title": title, "start": start, "end": end}
+        return await _gated(
+            tool_context, "create_calendar_event", payload,
+            hint=f"Create calendar event {title!r}?",
+            execute=execute,
+        )
 
     return [
         FunctionTool(list_recent_emails),
@@ -301,4 +356,5 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         FunctionTool(complete_task),
         FunctionTool(notify_user),
         FunctionTool(send_email),
+        FunctionTool(add_calendar_event),
     ]

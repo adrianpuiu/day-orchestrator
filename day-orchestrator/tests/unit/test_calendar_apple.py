@@ -40,6 +40,21 @@ class FakeEKEvent:
     def location(self):
         return self._location
 
+    def setTitle_(self, title) -> None:
+        self._title = title
+
+    def setStartDate_(self, date) -> None:
+        self._start = date
+
+    def setEndDate_(self, date) -> None:
+        self._end = date
+
+    def setCalendar_(self, calendar) -> None:
+        self._calendar = calendar
+
+    def eventIdentifier(self) -> str:
+        return self._identifier
+
 
 class FakeStore:
     def __init__(self, events) -> None:
@@ -111,3 +126,62 @@ def test_denied_prompt_raises(tmp_path) -> None:
     client = make_client(DecliningStore([]), auth_status=0)
     with pytest.raises(CalendarPermissionDenied, match="consent"):
         client.get_events(1)
+
+
+class WritingStore:
+    """Captures the create_event flow."""
+
+    def __init__(self) -> None:
+        self.saved: dict | None = None
+
+    def defaultCalendarForNewEvents(self):
+        return object()  # opaque calendar handle
+
+    def eventWithEventStore_(self, store):
+        return FakeEKEvent(0, 0, "")
+
+    def saveEvent_span_commit_error_(self, event, span, commit, error):
+        self.saved = {
+            "title": event.title(),
+            "start": event.startDate().timeIntervalSince1970(),
+            "end": event.endDate().timeIntervalSince1970(),
+        }
+        event._identifier = "ek-123"
+        return True, None
+
+
+def test_create_event_maps_and_saves() -> None:
+    from datetime import datetime
+
+    store = WritingStore()
+    client = AppleCalendarClient(
+        store_factory=lambda: store,
+        auth_status_fn=lambda EK, _store: 3,
+        event_factory=lambda s: store.eventWithEventStore_(s),
+    )
+    event_id = client.create_event(
+        "Plată factură curent", "2026-11-23T10:30", "2026-11-23T11:00"
+    )
+
+    assert event_id == "ek-123"
+    assert store.saved is not None
+    assert store.saved["title"] == "Plată factură curent"
+    expected = datetime.fromisoformat("2026-11-23T10:30").astimezone().timestamp()
+    assert abs(store.saved["start"] - expected) < 1
+    expected_end = datetime.fromisoformat("2026-11-23T11:00").astimezone().timestamp()
+    assert abs(store.saved["end"] - expected_end) < 1
+
+
+def test_create_event_without_writable_calendar() -> None:
+    class NoCalStore(WritingStore):
+        def defaultCalendarForNewEvents(self):
+            return None
+
+    no_cal = NoCalStore()
+    client = AppleCalendarClient(
+        store_factory=lambda: no_cal,
+        auth_status_fn=lambda EK, _store: 3,
+        event_factory=lambda s: no_cal.eventWithEventStore_(s),
+    )
+    with pytest.raises(CalendarPermissionDenied, match="writable"):
+        client.create_event("x", "2026-11-23T10:30", "2026-11-23T11:00")

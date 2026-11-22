@@ -124,6 +124,11 @@ class Runtime:
             budgets=self.cfg.budgets,
             timezone=self.cfg.timezone,
             card_sender=self._send_approval_card if self.telegram else None,
+            calendar_writer=(
+                self.calendar
+                if self.cfg.calendar_backend == "apple"
+                else None  # google adapter is read-only
+            ),
         )
 
         self.scheduler = EffectScheduler(
@@ -209,12 +214,20 @@ class Runtime:
     async def _send_approval_card(self, row: approval.Approval) -> int:
         assert self.telegram is not None
         p = row.payload
-        summary = (
-            "<b>Send this email?</b>\n"
-            f"To: {escape_html(str(p.get('to', '')))}\n"
-            f"Subject: {escape_html(str(p.get('subject', '')))}\n\n"
-            f"{escape_html(str(p.get('body', ''))[:800])}"
-        )
+        if row.kind == "create_calendar_event":
+            summary = (
+                "<b>Create this calendar event?</b>\n"
+                f"{escape_html(str(p.get('title', '')))}\n"
+                f"{escape_html(str(p.get('start', '')))} → "
+                f"{escape_html(str(p.get('end', '')))}"
+            )
+        else:
+            summary = (
+                "<b>Send this email?</b>\n"
+                f"To: {escape_html(str(p.get('to', '')))}\n"
+                f"Subject: {escape_html(str(p.get('subject', '')))}\n\n"
+                f"{escape_html(str(p.get('body', ''))[:800])}"
+            )
         return await self.telegram.send_approval_card(row.id, summary)
 
     # ---------- pipelines ----------

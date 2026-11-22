@@ -38,5 +38,9 @@ launchd-spawned interpreter is the same path, so the foreground grant is
 expected to carry over; if briefs ever report "calendar unavailable" without
 a clear cause, re-run `auth-calendar` and check System Settings → Privacy &
 Security → Calendars. pyobjc selector names differ from ObjC docs
-(`startDate_endDate_`, not `endingDate_`) — caught live, fixed. Read-only;
-calendar writes remain evolution step 4 (would reuse the approval gate).
+(`startDate_endDate_`, not `endingDate_`; save is `saveEvent_span_commit_error_`
+and takes 4 args in pyobjc) — caught live, fixed.
+Read-only became read-write (same day): `create_event` writes to the default
+calendar — exposed to the coordinator as `add_calendar_event`, a **send-class
+effect behind the same approval gate** (nothing is written without an Approve
+tap; evolution step 4 delivered early for local writes).

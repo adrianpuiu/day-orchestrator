@@ -158,7 +158,7 @@ flowchart LR
 1. **Move to an always-on box (Docker on home server / VPS)** — trigger: missed brief > 1/week from sleep. Cheap: single process already container-izable; SQLite rides as a volume; long polling needs no ports. Deployment-level change first — cheapest class.
 2. ~~**Local model option (Ollama / LM Studio, OpenAI-compatible)**~~ — **DONE 2026-11-22 (ADR-007)**: live on `ds41` at `192.168.0.206:8000/v1`; content minimization (C9) already bounded exposure; nightly evals (03:30) watch for drift.
 3. **Gmail API adapter** — trigger: need server-side labels/push/quota headroom. Swap behind the unchanged tool interface (C3); medium cost.
-4. **Calendar write access** — trigger: owner wants meeting scheduling. New `send`-class effect; reuses the approval gate unchanged. New ADR.
+4. ~~**Calendar write access**~~ **Delivered (ADR-009 addendum)**: `add_calendar_event` writes via EventKit, send-class effect behind the unchanged approval gate; live-proven. Google-backend writes remain open.
 5. **Never unless real**: multi-user, horizontal scale, microservice split (−2 target stands).
 
 ## Documentation & enforcement

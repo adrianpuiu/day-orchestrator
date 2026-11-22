@@ -70,11 +70,6 @@ class FakeGmail:
         )
 
 
-class FakeCalendar:
-    def get_events(self, days: int) -> list[dict[str, Any]]:
-        return []
-
-
 class FakeTelegram:
     def __init__(self) -> None:
         self.cards: list[dict[str, Any]] = []
@@ -108,18 +103,45 @@ class FakeTelegram:
         self.edits.append(text)
 
 
+class FakeCalendar:
+    """Records reads and approval-gated writes."""
+
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+        self.fetched: list[int] = []
+
+    def get_events(self, days: int) -> list[dict]:
+        self.fetched.append(days)
+        return []
+
+    def create_event(self, title: str, start: str, end: str) -> str:
+        self.events.append({"title": title, "start": start, "end": end})
+        return f"ek-{len(self.events)}"
+
+
 async def run_gate_scenario(
-    tmp: Path, verdict: str = "approved"
+    tmp: Path,
+    verdict: str = "approved",
+    function_call: tuple[str, dict] = (
+        "send_email",
+        {
+            "to": "bob@example.com",
+            "subject": "Lunch on Tuesday?",
+            "body": "Hi Bob — Tuesday 12:30 works?",
+        },
+    ),
 ) -> dict[str, Any]:
-    """Runs send_email → gate → verdict → outcome. Returns recorded evidence."""
+    """Runs a gated tool call → gate → verdict → outcome. Returns evidence."""
+    name, args = function_call
     cfg = Config(data_dir=tmp)
     gmail = FakeGmail()
     telegram = FakeTelegram()
+    calendar = FakeCalendar()
     runtime = Runtime(
         cfg=cfg,
         secrets=Secrets(InMemoryBackend()),
         gmail=gmail,  # type: ignore[arg-type]
-        calendar=FakeCalendar(),  # type: ignore[arg-type]
+        calendar=calendar,  # type: ignore[arg-type]
         telegram=telegram,  # type: ignore[arg-type]
         coordinator_model=ScriptedLlm(
             responses=[
@@ -127,13 +149,7 @@ async def run_gate_scenario(
                     parts=[
                         gtypes.Part(
                             function_call=gtypes.FunctionCall(
-                                id="fc_send_1",
-                                name="send_email",
-                                args={
-                                    "to": "bob@example.com",
-                                    "subject": "Lunch on Tuesday?",
-                                    "body": "Hi Bob — Tuesday 12:30 works?",
-                                },
+                                id="fc_send_1", name=name, args=args,
                             )
                         )
                     ]
@@ -168,6 +184,7 @@ async def run_gate_scenario(
         "card": telegram.cards[0],
         "card_edit": telegram.edits,
         "sent": gmail.sent,
+        "events": calendar.events,
         "actions": [dict(r) for r in log_rows],
     }
 

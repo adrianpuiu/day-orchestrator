@@ -24,16 +24,18 @@ class CalendarPermissionDenied(RuntimeError):
 
 
 class AppleCalendarClient:
-    """Reads macOS Calendar events; satisfies the calendar tool contract."""
+    """Reads and writes macOS Calendar events via EventKit (ADR-009)."""
 
     def __init__(
         self,
         *,
         store_factory: Callable[[], Any] | None = None,
         auth_status_fn: Callable[..., int] | None = None,
+        event_factory: Callable[[Any], Any] | None = None,
     ) -> None:
         self._store_factory = store_factory  # test seam
         self._auth_status_fn = auth_status_fn
+        self._event_factory = event_factory  # test seam
         self._store: Any = None
 
     def _get_store(self) -> Any:
@@ -81,6 +83,31 @@ class AppleCalendarClient:
             )
         log.info("calendar: %d event(s) in the next %d day(s)", len(out), days)
         return out
+
+
+    def create_event(self, title: str, start_iso: str, end_iso: str) -> str:
+        """Write: create an event in the default calendar; returns its id."""
+        import EventKit as EK
+
+        store = self._get_store()
+        calendar = store.defaultCalendarForNewEvents()
+        if calendar is None:
+            raise CalendarPermissionDenied("no writable calendar found")
+        event = (
+            self._event_factory(store)
+            if self._event_factory is not None
+            else EK.EKEvent.eventWithEventStore_(store)
+        )
+        event.setTitle_(title)
+        event.setStartDate_(_ns(datetime.fromisoformat(start_iso).astimezone()))
+        event.setEndDate_(_ns(datetime.fromisoformat(end_iso).astimezone()))
+        event.setCalendar_(calendar)
+        ok, error = store.saveEvent_span_commit_error_(
+            event, EK.EKSpanThisEvent, True, None
+        )
+        if not ok:
+            raise RuntimeError(f"EventKit save failed: {error}")
+        return str(event.eventIdentifier())
 
 
 def _auth_status(EK: Any, _store: Any) -> int:
