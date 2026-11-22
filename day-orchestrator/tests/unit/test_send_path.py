@@ -88,7 +88,7 @@ def test_only_calendar_modules_import_calendar_clients() -> None:
             str(p): sorted(m)
             for p, m in matches.items()
             if not (str(p).endswith("channels/calendar.py")
-                    or str(p).endswith("channels/calendar_apple.py"))
+                    or str(p).endswith("channels/calendar_helper.py"))
         }
         assert not unexpected, f"calendar clients imported outside adapters: {unexpected}"
 

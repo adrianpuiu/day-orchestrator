@@ -1,0 +1,7 @@
+#!/bin/bash
+# Calendar helper entry point (bundle executable).
+# EventKit TCC consent is attributed to com.agp.day-orchestrator thanks to
+# this .app wrapper — bare launchd binaries get prompts silently suppressed.
+set -euo pipefail
+cd "$(dirname "$0")/../../.."
+exec .venv/bin/python -m app.channels.calendar_helper "$@"

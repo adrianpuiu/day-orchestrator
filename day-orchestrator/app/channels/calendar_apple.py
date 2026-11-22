@@ -1,160 +1,68 @@
-"""Apple Calendar adapter: reads the local Calendar store via EventKit (ADR-009).
+"""Apple Calendar client — shells out to the bundled EventKit helper.
 
-Calendar.app already syncs the owner's iPhone accounts (iCloud/Google), so this
-reads the same events with zero OAuth setup. macOS-only; imports EventKit
-lazily so non-Mac hosts can still import the module.
+Direct EventKit calls from launchd-spawned python get their TCC prompts
+silently suppressed (observed 2026-11-22: granted=False returned instantly,
+even after `tccutil reset Calendar`). The DayOrchestrator.app wrapper gives
+macOS a stable bundle identity to attribute the consent to, so the dialog
+appears once and the toggle lands in System Settings (ADR-009 addendum).
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import subprocess
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
 
-# EKAuthorizationStatus: 0 not determined, 1 restricted, 2 denied, 3 authorized/full
-_AUTHORIZED = 3
-_DENIED_STATES = (1, 2)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+HELPER = PROJECT_ROOT / "DayOrchestrator.app" / "Contents" / "MacOS" / "DayOrchestrator"
 
 
 class CalendarPermissionDenied(RuntimeError):
-    """Calendar access denied or not granted — fix in System Settings."""
+    pass
 
 
 class AppleCalendarClient:
-    """Reads and writes macOS Calendar events via EventKit (ADR-009)."""
+    """Reads and writes macOS Calendar events via the bundled helper."""
 
     def __init__(
         self,
         *,
-        store_factory: Callable[[], Any] | None = None,
-        auth_status_fn: Callable[..., int] | None = None,
-        event_factory: Callable[[Any], Any] | None = None,
+        runner: Callable[[list[str]], dict[str, Any]] | None = None,
     ) -> None:
-        self._store_factory = store_factory  # test seam
-        self._auth_status_fn = auth_status_fn
-        self._event_factory = event_factory  # test seam
-        self._store: Any = None
+        self._runner = runner  # test seam
 
-    def _get_store(self) -> Any:
-        if self._store is not None:
-            return self._store
-        import EventKit as EK
-
-        self._EK = EK
-        store = (self._store_factory or (lambda: EK.EKEventStore.alloc().init()))()
-        status = (self._auth_status_fn or _auth_status)(EK, store)
-        if status in _DENIED_STATES:
-            raise CalendarPermissionDenied(
-                "Calendar access denied — grant it in System Settings → "
-                "Privacy & Security → Calendars, then restart the agent"
-            )
-        if status != _AUTHORIZED:
-            granted = _request_access(EK, store)
-            if not granted:
-                raise CalendarPermissionDenied(
-                    f"Calendar consent not granted (status={status}). If no dialog "
-                    "appeared, macOS suppressed it — an earlier timed-out prompt is "
-                    "remembered. Fix once: System Settings → Privacy & Security → "
-                    "Calendars → enable this python entry."
-                )
-        self._store = store
-        return store
+    def _run(self, args: list[str]) -> dict[str, Any]:
+        if self._runner is not None:
+            return self._runner(args)
+        proc = subprocess.run(
+            [str(HELPER), *args], capture_output=True, text=True, timeout=150
+        )
+        if proc.returncode == 0:
+            return json.loads(proc.stdout)
+        message = proc.stderr.strip() or f"calendar helper exited {proc.returncode}"
+        if proc.returncode == 2:
+            raise CalendarPermissionDenied(message)
+        raise RuntimeError(message)
 
     def get_events(self, days: int) -> list[dict[str, Any]]:
         """Sync: events from now to now+days across all calendars, local ISO."""
-        store = self._get_store()
-        start = datetime.now().astimezone()
-        end = start + timedelta(days=days)
-        predicate = store.predicateForEventsWithStartDate_endDate_calendars_(
-            _ns(start), _ns(end), None
-        )
-        events = store.eventsMatchingPredicate_(predicate) or []
-        out: list[dict[str, Any]] = []
-        for event in sorted(events, key=lambda ev: ev.startDate()):
-            start_iso = _iso(event.startDate())
-            end_raw = event.endDate()
-            out.append(
-                {
-                    "start": start_iso,
-                    "end": _iso(end_raw) if end_raw is not None else start_iso,
-                    "summary": str(event.title() or "(untitled)"),
-                    "location": str(event.location()) if event.location() else None,
-                }
-            )
-        log.info("calendar: %d event(s) in the next %d day(s)", len(out), days)
-        return out
-
-
-    def access_status(self) -> int:
-        """0 not determined, 2 denied, 3 authorized. Passive; prompts nothing."""
-        import EventKit as EK
-
-        if self._auth_status_fn is not None:
-            return int(self._auth_status_fn(EK, None))
-        return int(EK.EKEventStore.authorizationStatusForEntityType_(EK.EKEntityTypeEvent))
+        data = self._run(["get-events", "--days", str(days)])
+        events = data.get("events", [])
+        log.info("calendar: %d event(s) in the next %d day(s)", len(events), days)
+        return events
 
     def create_event(self, title: str, start_iso: str, end_iso: str) -> str:
         """Write: create an event in the default calendar; returns its id."""
-        import EventKit as EK
-
-        store = self._get_store()
-        calendar = store.defaultCalendarForNewEvents()
-        if calendar is None:
-            raise CalendarPermissionDenied("no writable calendar found")
-        event = (
-            self._event_factory(store)
-            if self._event_factory is not None
-            else EK.EKEvent.eventWithEventStore_(store)
+        data = self._run(
+            ["create-event", "--title", title, "--start", start_iso, "--end", end_iso]
         )
-        event.setTitle_(title)
-        event.setStartDate_(_ns(datetime.fromisoformat(start_iso).astimezone()))
-        event.setEndDate_(_ns(datetime.fromisoformat(end_iso).astimezone()))
-        event.setCalendar_(calendar)
-        ok, error = store.saveEvent_span_commit_error_(
-            event, EK.EKSpanThisEvent, True, None
-        )
-        if not ok:
-            raise RuntimeError(f"EventKit save failed: {error}")
-        return str(event.eventIdentifier())
+        return str(data["event_id"])
 
-
-def _auth_status(EK: Any, _store: Any) -> int:
-    return EK.EKEventStore.authorizationStatusForEntityType_(EK.EKEntityTypeEvent)
-
-
-def _request_access(EK: Any, store: Any) -> bool:
-    """Blocks until the user answers the TCC prompt (up to 2 minutes)."""
-    import threading
-
-    done = threading.Event()
-    state: dict[str, bool] = {}
-
-    def handler(granted: bool, error: object) -> None:
-        if error is not None:
-            log.warning("calendar consent error: %s", error)
-        state["granted"] = bool(granted)
-        done.set()
-
-    if hasattr(store, "requestFullAccessToEventsWithCompletion_"):
-        store.requestFullAccessToEventsWithCompletion_(handler)
-    else:  # pre-macOS-14 API
-        store.requestAccessToEntityType_completion_(EK.EKEntityTypeEvent, handler)
-    if not done.wait(timeout=120):
-        log.error("calendar consent prompt timed out")
-        return False
-    return state.get("granted", False)
-
-
-def _ns(dt: datetime) -> Any:
-    from Foundation import NSDate
-
-    return NSDate.dateWithTimeIntervalSince1970_(dt.timestamp())
-
-
-def _iso(ns_date: Any) -> str:
-    return datetime.fromtimestamp(ns_date.timeIntervalSince1970()).astimezone().isoformat(
-        timespec="minutes"
-    )
+    def access_status(self) -> int:
+        """0 not determined, 2 denied, 3 authorized. Passive; prompts nothing."""
+        return int(self._run(["status"])["status"])

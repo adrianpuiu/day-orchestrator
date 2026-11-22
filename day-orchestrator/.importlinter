@@ -19,3 +19,4 @@ modules =
     app.channels.telegram
     app.channels.calendar
     app.channels.calendar_apple
+    app.channels.calendar_helper
