@@ -452,7 +452,13 @@ class GmailWatcher:
         """One IDLE cycle on a dedicated, cycle-owned connection."""
         client = self._client.new_imap()
         try:
-            client.idle()
+            try:
+                client.idle()
+            except Exception:
+                log.warning("IDLE refused; degrading to poll-only cycle", exc_info=True)
+                self._stop.wait(min(self._poll_seconds, 60.0))
+                self.poll_once(client)
+                return
             try:
                 deadline = time.monotonic() + self._poll_seconds
                 while not self._stop.is_set() and time.monotonic() < deadline:

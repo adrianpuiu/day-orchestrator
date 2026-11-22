@@ -1,8 +1,8 @@
 """Typed tool layer (C3): the only way an LLM reaches the world.
 
-Every tool declares an effect class (`__effect__`); `send`-class tools execute
-only against a resolved approval row (ADR-004). The LLM never sees credentials:
-adapters are injected as structural protocols, wired by the composition root.
+`send`-class tools execute only against a resolved approval row (ADR-004).
+The LLM never sees credentials: adapters are injected as structural
+protocols, wired by the composition root.
 Only this module may call `approval.require_resolved` (CI gate, ADR-006).
 """
 
@@ -11,9 +11,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from enum import StrEnum
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from google.adk.tools import FunctionTool, ToolContext
@@ -24,21 +25,6 @@ from .core.db import Database
 from .core.textfmt import escape_html, markdown_to_telegram_html
 
 log = logging.getLogger(__name__)
-
-
-class Effect(StrEnum):
-    READ = "read"
-    DRAFT = "draft"
-    SEND = "send"
-    NOTIFY = "notify"
-
-
-def effect(e: Effect) -> Callable:
-    def decorate(fn: Callable) -> Callable:
-        fn.__effect__ = e  # type: ignore[attr-defined]
-        return fn
-
-    return decorate
 
 
 # --- structural adapter contracts (implemented in app/channels, injected at runtime) ---
@@ -82,7 +68,6 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
 
     # ---- read tools ----
 
-    @effect(Effect.READ)
     async def list_recent_emails(limit: int = 10) -> dict[str, Any]:
         """Lists recent inbox emails with id, subject, sender, snippet.
 
@@ -93,7 +78,6 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         msgs = await asyncio.to_thread(deps.gmail.fetch_recent, limit)
         return {"status": "success", "emails": msgs}
 
-    @effect(Effect.READ)
     async def read_email(uid: str) -> dict[str, Any]:
         """Returns one full email (headers + body text) by id.
 
@@ -103,7 +87,6 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         msg = await asyncio.to_thread(deps.gmail.get_message, uid)
         return {"status": "success", **msg}
 
-    @effect(Effect.READ)
     async def get_upcoming_events(days: int = 2) -> dict[str, Any]:
         """Lists calendar events for today and the next days.
 
@@ -119,7 +102,6 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             events = []
         return {"status": "success", "events": events}
 
-    @effect(Effect.READ)
     async def list_tasks() -> dict[str, Any]:
         """Lists all open tasks; each has a bucket: overdue | today | tomorrow | later | someday."""
         today = tasks.local_today(deps.timezone)
@@ -130,7 +112,6 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
                        } for row in rows],
         }
 
-    @effect(Effect.READ)
     async def list_pending_approvals() -> dict[str, Any]:
         """Lists send actions awaiting owner approval (live state — the only
         source of truth; conversation memory about old approvals is stale)."""
@@ -152,7 +133,6 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
 
     # ---- write tools (non-send) ----
 
-    @effect(Effect.DRAFT)
     async def save_draft_reply(uid: str, body: str) -> dict[str, Any]:
         """Saves a reply draft in the Gmail Drafts folder (never sends).
 
@@ -169,7 +149,6 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         actionlog.log(deps.db, "tool", "draft_saved", "draft", detail={"uid": uid})
         return {"status": "success", "draft_id": draft_id}
 
-    @effect(Effect.NOTIFY)
     async def add_task(title: str, due: str | None = None) -> dict[str, Any]:
         """Adds a task, optionally with an ISO 8601 due datetime.
 
@@ -180,7 +159,6 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         task = tasks.add(deps.db, title, source="tool", due=due)
         return {"status": "success", "task": task}
 
-    @effect(Effect.READ)
     async def complete_task(task_id: str) -> dict[str, Any]:
         """Marks a task done by id.
 
@@ -189,9 +167,31 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         """
         return {"status": "success", "result": tasks.complete(deps.db, task_id)}
 
-    @effect(Effect.NOTIFY)
+    async def add_reminder(text: str, fire_at: str) -> dict[str, Any]:
+        """Schedules a reminder that pushes to the owner's Telegram at fire_at.
+
+        Args:
+            text: The reminder text to push.
+            fire_at: ISO datetime when to fire, e.g. 2026-11-24T09:00.
+        """
+        try:
+            when = datetime.fromisoformat(fire_at)
+        except ValueError:
+            return {"status": "error", "error": f"bad fire_at: {fire_at!r}"}
+        rem_id = uuid.uuid4().hex[:12]
+        now = datetime.now(UTC).isoformat(timespec="seconds")
+        deps.db.execute(
+            "INSERT INTO reminders (id, text, fire_at, status, created_at) "
+            "VALUES (?, ?, ?, 'scheduled', ?)",
+            (rem_id, text, when.isoformat(timespec="seconds"), now),
+        )
+        actionlog.log(deps.db, "tool", "reminder_added", "notify",
+                      detail={"id": rem_id})
+        return {"status": "success", "reminder_id": rem_id}
+
     async def notify_user(text: str, category: str = "triage_alerts") -> dict[str, Any]:
         """Pushes a message to the owner's Telegram. Subject to the daily budget.
+
 
         Args:
             text: Message text (markdown).
@@ -301,7 +301,6 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
                 log.exception("send-failure notify also failed")
             return {"status": "send_failed", "approval_id": row.id}
 
-    @effect(Effect.SEND)
     async def send_email(
         tool_context: ToolContext,
         to: str,
@@ -342,7 +341,6 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             execute=execute,
         )
 
-    @effect(Effect.SEND)
     async def add_calendar_event(
         tool_context: ToolContext,
         title: str,
@@ -416,7 +414,6 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             execute=execute,
         )
 
-    @effect(Effect.SEND)
     async def edit_calendar_event(
         tool_context: ToolContext,
         event_id: str,
@@ -468,7 +465,6 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             execute=execute,
         )
 
-    @effect(Effect.SEND)
     async def delete_calendar_event(
         tool_context: ToolContext,
         event_id: str,
@@ -503,7 +499,7 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             execute=execute,
         )
 
-    return [
+    tools = [
         FunctionTool(list_recent_emails),
         FunctionTool(read_email),
         FunctionTool(get_upcoming_events),
@@ -513,8 +509,15 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         FunctionTool(add_task),
         FunctionTool(complete_task),
         FunctionTool(notify_user),
+        FunctionTool(add_reminder),
         FunctionTool(send_email),
-        FunctionTool(add_calendar_event),
-        FunctionTool(edit_calendar_event),
-        FunctionTool(delete_calendar_event),
     ]
+    if deps.calendar_writer is not None:
+        # Read-only backends (google) offer no write path at all: never
+        # register a card that could only die on approval.
+        tools += [
+            FunctionTool(add_calendar_event),
+            FunctionTool(edit_calendar_event),
+            FunctionTool(delete_calendar_event),
+        ]
+    return tools

@@ -24,20 +24,18 @@ def log(
     action: str,
     effect_class: str,
     approval_id: str | None = None,
-    dedup_key: str | None = None,
     detail: dict[str, Any] | None = None,
 ) -> None:
     db.execute(
         "INSERT OR IGNORE INTO action_log "
         "(ts, actor, action, effect_class, approval_id, dedup_key, detail) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, NULL, ?)",
         (
             _now(),
             actor,
             action,
             effect_class,
             approval_id,
-            dedup_key,
             json.dumps(detail) if detail else None,
         ),
     )
@@ -51,13 +49,6 @@ def claim(db: Database, dedup_key: str, actor: str) -> bool:
         (_now(), actor, dedup_key),
     )
     return cur.rowcount > 0
-
-
-def has(db: Database, dedup_key: str) -> bool:
-    return (
-        db.query_one("SELECT 1 FROM action_log WHERE dedup_key=?", (dedup_key,))
-        is not None
-    )
 
 
 def recent(db: Database, limit: int = 50) -> list:

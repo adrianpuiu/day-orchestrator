@@ -19,9 +19,8 @@ from typing import Any
 
 from .db import Database
 
-ALLOWED = {"pending", "approved", "rejected", "cancelled", "superseded"}
 TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"approved", "rejected", "cancelled", "superseded"},
+    "pending": {"approved", "rejected", "cancelled"},
 }
 
 
@@ -64,14 +63,13 @@ def create(
     db: Database,
     kind: str,
     payload: dict[str, Any],
-    dedup_key: str | None = None,
-    session_ref: str | None = None,
+    session_ref: str = "",
 ) -> Approval:
     approval_id = uuid.uuid4().hex[:16]
     db.execute(
-        "INSERT INTO approvals (id, kind, payload, state, created_at, dedup_key, session_ref) "
-        "VALUES (?, ?, ?, 'pending', ?, ?, ?)",
-        (approval_id, kind, json.dumps(payload), _now(), dedup_key, session_ref),
+        "INSERT INTO approvals (id, kind, payload, state, created_at, session_ref) "
+        "VALUES (?, ?, ?, 'pending', ?, ?)",
+        (approval_id, kind, json.dumps(payload), _now(), session_ref),
     )
     return get(db, approval_id)  # type: ignore[return-value]
 
@@ -89,11 +87,6 @@ def resolve(db: Database, approval_id: str, verdict: str, via: str) -> Approval:
         (verdict, _now(), via, approval_id),
     )
     return get(db, approval_id)  # type: ignore[return-value]
-
-
-def supersede(db: Database, approval_id: str) -> Approval:
-    """Pending approval replaced by a newer draft of the same effect."""
-    return resolve(db, approval_id, "cancelled", "superseded")
 
 
 def update_payload(db: Database, approval_id: str, payload: dict[str, Any]) -> Approval:

@@ -241,6 +241,7 @@ def main() -> None:
         cmd_reset_pairing()
     elif args.cmd == "run":
         import logging
+        import signal
 
         logging.basicConfig(
             level=logging.INFO,
@@ -248,7 +249,16 @@ def main() -> None:
         )
         from .runtime import Runtime
 
-        asyncio.run(Runtime().start())
+        async def _serve() -> None:
+            rt = Runtime()
+            loop = asyncio.get_running_loop()
+            # launchd sends SIGTERM on unload/logout: drain cleanly instead
+            # of dying mid-effect (watcher, telegram, scheduler, db close).
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.add_signal_handler(sig, rt.request_stop)
+            await rt.start()
+
+        asyncio.run(_serve())
     elif args.cmd == "eval-nightly":
         import logging
         import os

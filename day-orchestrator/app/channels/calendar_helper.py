@@ -56,8 +56,6 @@ def main() -> None:
     sub.add_parser("status")
     p_geo = sub.add_parser("geocode")
     p_geo.add_argument("--query", required=True)
-    p_geo.add_argument("--lat", type=float, default=None)
-    p_geo.add_argument("--lon", type=float, default=None)
     p_upd = sub.add_parser("update-event")
     p_upd.add_argument("--id", required=True)
     p_upd.add_argument("--title")

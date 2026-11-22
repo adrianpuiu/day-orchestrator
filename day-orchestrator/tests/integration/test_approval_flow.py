@@ -82,3 +82,52 @@ async def test_approval_gate_geocodes_location(tmp_path: Path) -> None:
     assert result["events"][0]["location"].endswith("(validated)"), (
         "the raw location must be canonicalized by geocoding before the card"
     )
+
+
+async def test_approval_gate_edit_calendar_event(tmp_path: Path) -> None:
+    result = await run_gate_scenario(
+        tmp_path,
+        verdict="approved",
+        function_call=("edit_calendar_event", {
+            "event_id": "ek-1", "new_start": "2026-11-25T10:00",
+        }),
+        calendar_seed=[{"id": "ek-1", "title": "Dentist",
+                        "start": "2026-11-24T10:00", "end": "2026-11-24T11:00"}],
+    )
+
+    assert result["approval_state"] == "approved"
+    assert result["events"][0]["start"] == "2026-11-25T10:00", (
+        "approved edit must move exactly the seeded occurrence"
+    )
+    actions = {row["action"] for row in result["actions"]}
+    assert "calendar_event_updated" in actions
+    assert "email_sent" not in actions
+
+
+async def test_approval_gate_delete_calendar_event(tmp_path: Path) -> None:
+    result = await run_gate_scenario(
+        tmp_path,
+        verdict="approved",
+        function_call=("delete_calendar_event", {"event_id": "ek-1"}),
+        calendar_seed=[{"id": "ek-1", "title": "Dentist",
+                        "start": "2026-11-24T10:00", "end": "2026-11-24T11:00"}],
+    )
+
+    assert result["approval_state"] == "approved"
+    assert result["events"] == [], "approved delete must remove the event"
+    actions = {row["action"] for row in result["actions"]}
+    assert "calendar_event_deleted" in actions
+
+
+async def test_approval_gate_delete_rejected_keeps_event(tmp_path: Path) -> None:
+    result = await run_gate_scenario(
+        tmp_path,
+        verdict="rejected",
+        function_call=("delete_calendar_event", {"event_id": "ek-1"}),
+        calendar_seed=[{"id": "ek-1", "title": "Dentist",
+                        "start": "2026-11-24T10:00", "end": "2026-11-24T11:00"}],
+    )
+
+    assert result["approval_state"] == "rejected"
+    assert len(result["events"]) == 1, "rejected delete must keep the event"
+    assert "calendar_event_deleted" not in {r["action"] for r in result["actions"]}

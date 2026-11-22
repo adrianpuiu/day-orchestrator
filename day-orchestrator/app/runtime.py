@@ -203,11 +203,9 @@ class Runtime:
         # tests/smoke may inject an ADK model object (ScriptedLlm) instead.
         self._coordinator_model = coordinator_model
         coordinator = make_coordinator(self._coordinator_model or self.cfg, tools)
-        self.coordinator_app = App(
-            name=APP_NAME,
-            root_agent=coordinator,
-            resumability_config=ResumabilityConfig(is_resumable=True),
-        )
+        # Stored bare: _run_agent builds a fresh resumable App per invocation,
+        # so a never-executed wrapper here would only suggest a second path.
+        self.coordinator = coordinator
         self._coordinator_runner: Runner | None = None
         self._watcher: GmailWatcher | None = None
         self._stop = asyncio.Event()
@@ -459,6 +457,8 @@ class Runtime:
         limit = self.cfg.budgets.get("triage_alerts", 5)
         if not budget.allow(self.db, "triage_alerts", limit, self.cfg.timezone):
             return
+        rank = {"high": 0, "normal": 1, "low": 2}
+        awaiting.sort(key=lambda i: rank.get(str(i.get("importance", "normal")), 1))
         lines = ["<b>Awaiting your reply:</b>"]
         for item in awaiting[:5]:
             lines.append(f"• {escape_html(str(item.get('summary', '')))}")
@@ -606,7 +606,7 @@ class Runtime:
         typing = self.telegram.start_typing()
         try:
             reply = await self._run_agent(
-                self.coordinator_app.root_agent,
+                self.coordinator,
                 f"tg:{chat_id}",
                 session_id,
                 gtypes.Content(role="user", parts=[gtypes.Part.from_text(text=text)]),
@@ -756,7 +756,7 @@ class Runtime:
 
     def _root_for_user(self, user_id: str):
         if user_id.startswith("tg:"):
-            return self.coordinator_app.root_agent
+            return self.coordinator
         if user_id == "system:briefing":
             return pipelines.make_briefing_pipeline(self.deps, self.cfg)
         if user_id == "system:incoming":

@@ -96,14 +96,9 @@ class AppleCalendarClient:
         data = self._run(args)
         return str(data["event_id"])
 
-    def geocode(
-        self, query: str, lat: float | None = None, lon: float | None = None
-    ) -> list[dict[str, Any]]:
+    def geocode(self, query: str) -> list[dict[str, Any]]:
         """Passive: Apple Maps geocoding; top placemarks with coordinates."""
-        args = ["geocode", "--query", query]
-        if lat is not None and lon is not None:
-            args += ["--lat", str(lat), "--lon", str(lon)]
-        data = self._run(args)
+        data = self._run(["geocode", "--query", query])
         return data.get("results", [])
 
     def get_event_meta(self, event_id: str) -> dict[str, Any] | None:

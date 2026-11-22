@@ -1,4 +1,3 @@
-# ruff: noqa
 """ADK entrypoint: the W5 coordinator as `root_agent`.
 
 Programmatic runs (briefings, triage, sweeps) go through `app.runtime`.
@@ -13,8 +12,8 @@ from .channels.gmail import GmailClient
 from .core.config import PROJECT_ROOT, Config
 from .core.db import Database
 from .core.secrets import default_secrets
-from .tools import ToolDeps, make_tools
 from .runtime import NullNotifier
+from .tools import ToolDeps, make_tools
 from .workflows.agents import make_coordinator
 
 

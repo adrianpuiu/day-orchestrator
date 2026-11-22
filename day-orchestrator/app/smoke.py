@@ -134,9 +134,9 @@ class FakeCalendar:
                             "location": location, "lat": lat, "lon": lon})
         return event_id
 
-    def geocode(self, query: str, lat=None, lon=None) -> list[dict]:
+    def geocode(self, query: str) -> list[dict]:
         return [{"name": query, "address": f"{query} (validated)",
-                 "lat": lat or 46.57, "lon": lon or 26.90}]
+                 "lat": 44.42, "lon": 26.10}]
 
     def get_event_meta(self, event_id: str) -> dict | None:
         return next((e for e in self.events if e["id"] == event_id), None)
@@ -170,6 +170,7 @@ async def run_gate_scenario(
             "body": "Hi Bob — Tuesday 12:30 works?",
         },
     ),
+    calendar_seed: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Runs a gated tool call → gate → verdict → outcome. Returns evidence."""
     name, args = function_call
@@ -177,6 +178,7 @@ async def run_gate_scenario(
     gmail = FakeGmail()
     telegram = FakeTelegram()
     calendar = FakeCalendar()
+    calendar.events.extend(calendar_seed or [])
     runtime = Runtime(
         cfg=cfg,
         secrets=Secrets(InMemoryBackend()),
