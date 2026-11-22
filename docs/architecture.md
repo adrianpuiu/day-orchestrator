@@ -63,7 +63,7 @@ At most four critical: auditability, privacy, timeliness, reliability.
 | Telegram | `aiogram` 3.x, long polling | no webhook → no public endpoint (C1) |
 | IMAP | `IMAPClient` (IDLE support), executor thread bridged to asyncio | IDLE flaky → 3-min poll fallback |
 | SMTP | stdlib `smtplib`, STARTTLS 587 | sends only via approval-gated path |
-| Calendar | Google Calendar API, scope `calendar.readonly` | write access = future ADR |
+| Calendar | **Apple EventKit local sync** (ADR-009): reads Calendar.app — same events as the iPhone, no OAuth | Google Calendar API adapter kept behind `calendar_backend = "google"` |
 | Persistence | SQLite (stdlib + ADK `DatabaseSessionService`) | one file, WAL |
 | Scheduling | APScheduler (in-memory store), launchd `KeepAlive` | catch-up on wake (C7); effects re-derived per boot |
 | Secrets | project `.env` (git-ignored), Keychain fallback | `app/core/secrets.py` |
@@ -75,7 +75,7 @@ At most four critical: auditability, privacy, timeliness, reliability.
 |---|---|---|
 | Owner | briefs, reminders, approvals, commands | Telegram Bot API (long polling) |
 | Gmail | read mail, drafts, send | IMAP 993 TLS / SMTP 587 STARTTLS; app password or XOAUTH2 |
-| Google Calendar | read events | Calendar API v3, OAuth 2.0 desktop flow, read-only scope |
+| Apple Calendar (local) | read events | EventKit via Calendar.app (syncs with iPhone); Google API adapter optional via config |
 | LLM provider (Gemini) | agent reasoning | outbound HTTPS via ADK; minimized content (C9) |
 
 ### Container diagram (C4 level 2)
@@ -94,7 +94,7 @@ flowchart LR
   end
   subgraph ADP["Adapters (deterministic, no LLM)"]
     GM["Gmail adapter\nIMAPClient + smtplib"]
-    CAL["Calendar adapter\nread-only API"]
+    CAL["Calendar adapter\nEventKit (local)"]
     TG["Telegram adapter\naiogram"]
   end
   GATE["Approval gate\nstate machine (C4)"]

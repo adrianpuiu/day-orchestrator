@@ -71,7 +71,7 @@ def test_only_telegram_module_imports_aiogram() -> None:
     _assert_single_owner(matches, "aiogram", "channels/telegram.py")
 
 
-def test_only_calendar_module_imports_google_api_clients() -> None:
+def test_only_calendar_modules_import_calendar_clients() -> None:
     matches: dict[Path, set[str]] = {}
     for path in iter_py():
         hits = {
@@ -79,11 +79,18 @@ def test_only_calendar_module_imports_google_api_clients() -> None:
             for m in imports_of(path)
             if m.startswith(("googleapiclient", "google_auth_oauthlib", "google.oauth2",
                              "google.auth.transport", "google.auth.exceptions"))
+            or m == "EventKit"
         }
         if hits:
             matches[path] = hits
-    if matches:  # calendar deps optional at runtime; if present, only this file
-        _assert_single_owner(matches, "google api client", "channels/calendar.py")
+    if matches:  # calendar deps optional at runtime; if present, only these files
+        unexpected = {
+            str(p): sorted(m)
+            for p, m in matches.items()
+            if not (str(p).endswith("channels/calendar.py")
+                    or str(p).endswith("channels/calendar_apple.py"))
+        }
+        assert not unexpected, f"calendar clients imported outside adapters: {unexpected}"
 
 
 def test_send_gate_called_only_in_tools_layer() -> None:

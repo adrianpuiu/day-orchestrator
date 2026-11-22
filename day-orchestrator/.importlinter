@@ -18,3 +18,4 @@ modules =
     app.channels.gmail
     app.channels.telegram
     app.channels.calendar
+    app.channels.calendar_apple

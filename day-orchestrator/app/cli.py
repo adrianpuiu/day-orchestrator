@@ -27,9 +27,15 @@ def main() -> None:
 
     sub.add_parser("secrets", help="list known secret names")
 
-    p_auth = sub.add_parser("auth-calendar", help="run the one-time calendar consent")
-    p_auth.add_argument("--client-secret", required=True,
-                        help="path to Google OAuth client secret JSON")
+    p_auth = sub.add_parser(
+        "auth-calendar",
+        help="grant calendar access (apple: TCC prompt; google: OAuth consent)",
+    )
+    p_auth.add_argument(
+        "--client-secret",
+        default=None,
+        help="Google OAuth client secret JSON (google backend only)",
+    )
 
     sub.add_parser("run", help="run the orchestrator (foreground; launchd wraps it)")
     sub.add_parser("eval-nightly", help="run live agent evals; alert Telegram on failure")
@@ -48,13 +54,26 @@ def main() -> None:
         print(f"stored {args.name} in {PROJECT_ROOT / '.env'} (git-ignored).")
     elif args.cmd == "auth-calendar":
         cfg = Config.load()
-        from .channels.calendar import CalendarClient
+        if cfg.calendar_backend == "apple":
+            from .channels.calendar_apple import AppleCalendarClient
 
-        client = CalendarClient(
-            cfg.data_dir / "calendar_token.json", Path(args.client_secret)
-        )
-        events = client.get_events(1)
-        print(f"calendar OK: {len(events)} event(s) in the next day.")
+            print("A macOS consent prompt will appear — click OK to allow "
+                  "calendar access (up to 2 minutes).")
+            events = AppleCalendarClient().get_events(1)
+            print(f"calendar OK: {len(events)} event(s) in the next 24h.")
+        else:
+            if not args.client_secret:
+                raise SystemExit(
+                    "google backend needs --client-secret (or switch "
+                    "calendar_backend to 'apple' in config.toml)"
+                )
+            from .channels.calendar import CalendarClient
+
+            client = CalendarClient(
+                cfg.data_dir / "calendar_token.json", Path(args.client_secret)
+            )
+            events = client.get_events(1)
+            print(f"calendar OK: {len(events)} event(s) in the next day.")
     elif args.cmd == "run":
         import logging
 

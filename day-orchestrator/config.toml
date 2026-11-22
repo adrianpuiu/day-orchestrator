@@ -10,3 +10,6 @@ coordinator_model = "ds41"
 
 # Budgets/schedule defaults live in app/core/config.py; override here if needed.
 # brief_time = "07:00"
+
+# Calendar source: "apple" (EventKit local sync, default) or "google" (OAuth)
+calendar_backend = "apple"

@@ -93,10 +93,17 @@ class Runtime:
         self.bus = EventBus()
         self.loop: asyncio.AbstractEventLoop | None = None
 
-        self.calendar = calendar or CalendarClient(
-            self.cfg.data_dir / "calendar_token.json",
-            self.cfg.data_dir / "calendar_client_secret.json",
-        )
+        if calendar is not None:
+            self.calendar = calendar
+        elif self.cfg.calendar_backend == "apple":
+            from .channels.calendar_apple import AppleCalendarClient
+
+            self.calendar = AppleCalendarClient()
+        else:
+            self.calendar = CalendarClient(
+                self.cfg.data_dir / "calendar_token.json",
+                self.cfg.data_dir / "calendar_client_secret.json",
+            )
         self.gmail = gmail or GmailClient(
             self.secrets.require("GMAIL_ADDRESS"),
             self.secrets.require("GMAIL_APP_PASSWORD"),

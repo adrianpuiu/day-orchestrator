@@ -24,12 +24,18 @@ def _build_root_agent():
     db = Database(cfg.db_path)
     db.init_schema()
     secrets = default_secrets(PROJECT_ROOT)
+    if cfg.calendar_backend == "apple":
+        from .channels.calendar_apple import AppleCalendarClient
+
+        calendar = AppleCalendarClient()
+    else:
+        calendar = CalendarClient(cfg.data_dir / "calendar_token.json")
     deps = ToolDeps(
         db=db,
         gmail=GmailClient(
             secrets.get("GMAIL_ADDRESS") or "", secrets.get("GMAIL_APP_PASSWORD") or ""
         ),
-        calendar=CalendarClient(cfg.data_dir / "calendar_token.json"),
+        calendar=calendar,
         notifier=NullNotifier(),  # playground must not push to Telegram
         budgets=cfg.budgets,
         timezone=cfg.timezone,

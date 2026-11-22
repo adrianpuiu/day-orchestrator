@@ -37,8 +37,11 @@ uv run python -m app.cli set-secret TELEGRAM_BOT_TOKEN   # BotFather token
 uv run python -m app.cli set-secret GMAIL_ADDRESS
 uv run python -m app.cli set-secret GMAIL_APP_PASSWORD   # needs Google 2FA, see ADR-002
 
-# 3. One-time calendar consent (opens browser; needs OAuth client secret JSON)
-uv run python -m app.cli auth-calendar --client-secret ~/Downloads/client_secret.json
+# 3. Calendar access — one macOS consent prompt, no Google OAuth needed
+#    (reads Calendar.app, which syncs with your iPhone; ADR-009)
+uv run python -m app.cli auth-calendar
+#    If briefs ever say "calendar unavailable": System Settings → Privacy &
+#    Security → Calendars → allow the python binary.
 
 # 4. Pair Telegram: run the app, send /start from your chat
 uv run python -m app.cli run
