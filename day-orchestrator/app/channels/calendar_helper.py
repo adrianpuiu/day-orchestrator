@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from datetime import datetime, timedelta
 
 
@@ -48,6 +49,10 @@ def main() -> None:
     )
     p_create.add_argument("--location", default="")
     sub.add_parser("status")
+    p_geo = sub.add_parser("geocode")
+    p_geo.add_argument("--query", required=True)
+    p_geo.add_argument("--lat", type=float, default=None)
+    p_geo.add_argument("--lon", type=float, default=None)
     p_upd = sub.add_parser("update-event")
     p_upd.add_argument("--id", required=True)
     p_upd.add_argument("--title")
@@ -77,6 +82,49 @@ def main() -> None:
                 }
             )
         )
+        return
+
+    if args.cmd == "geocode":
+        import CoreLocation
+        from AppKit import NSApplication
+        from Foundation import NSDefaultRunLoopMode, NSRunLoop
+
+        NSApplication.sharedApplication().finishLaunching()
+        geocoder = CoreLocation.CLGeocoder.alloc().init()
+        done: list = []
+
+        def _done(placemarks, err) -> None:
+            done.append((placemarks, err))
+
+        geocoder.geocodeAddressString_completionHandler_(args.query, _done)
+        runloop = NSRunLoop.currentRunLoop()
+        deadline = time.time() + 15
+        while time.time() < deadline and not done:
+            runloop.runMode_beforeDate_(
+                NSDefaultRunLoopMode,
+                __import__("Foundation", fromlist=["NSDate"]).NSDate.dateWithTimeIntervalSinceNow_(0.1),
+            )
+        if not done:
+            _die("geocoder did not answer in 15s", 1)
+        placemarks, err = done[0]
+        if err is not None:
+            _die(f"geocoder error: {err}", 1)
+        items = []
+        for pm in (placemarks or [])[:5]:
+            coord = pm.location().coordinate()
+            parts = [
+                str(x) for x in (
+                    pm.name(), pm.thoroughfare(), pm.subThoroughfare(),
+                    pm.locality(), pm.administrativeArea(), pm.country(),
+                ) if x
+            ]
+            items.append({
+                "name": str(pm.name() or ""),
+                "address": ", ".join(parts),
+                "lat": coord.latitude,
+                "lon": coord.longitude,
+            })
+        print(json.dumps({"results": items}))
         return
 
     store = EK.EKEventStore.alloc().init()
