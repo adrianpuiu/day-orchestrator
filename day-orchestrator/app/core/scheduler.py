@@ -1,18 +1,19 @@
 """APScheduler wiring (ADR-005): date-scoped job ids, claims in action_log.
 
-Persistent jobstore survives restarts; a job missed while the Mac slept fires
-once on wake within misfire_grace_time (coalesce), never twice — handlers
-additionally claim their dedup key in the action log.
+The scheduler uses the in-memory store BY DESIGN: every scheduled effect is
+re-derived from config on every boot (`ensure_daily` re-adds date-scoped
+jobs), the at-most-once latch lives in the action_log claims, and reminder
+truth lives in the `reminders` table. A persistent jobstore adds nothing here
+— missed effects within the grace window fire once on start; older ones are
+skipped and logged.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import datetime
 
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
 
@@ -21,7 +22,7 @@ from .events import REMINDER_DUE, Event, EventBus
 
 log = logging.getLogger(__name__)
 
-GRACE = timedelta(hours=6)
+GRACE_SECONDS = 6 * 3600  # APScheduler 3.x wants misfire_grace_time in seconds
 
 Handler = Callable[[str], Awaitable[None]]
 
@@ -37,7 +38,6 @@ def local_tzinfo(timezone_cfg: str):
 class EffectScheduler:
     def __init__(
         self,
-        db_path: Path,
         timezone_cfg: str,
         handlers: dict[str, Handler],
         bus: EventBus,
@@ -45,11 +45,7 @@ class EffectScheduler:
         self._handlers = handlers
         self._bus = bus
         self._tz = local_tzinfo(timezone_cfg)
-        self._db_path = db_path
-        self._sched = AsyncIOScheduler(
-            jobstores={"main": SQLAlchemyJobStore(url=f"sqlite:///{db_path}")},
-            timezone=self._tz,
-        )
+        self._sched = AsyncIOScheduler(timezone=self._tz)
 
     async def start(self) -> None:
         self._sched.start(paused=False)
@@ -78,7 +74,7 @@ class EffectScheduler:
             id=job_id,
             args=[kind, job_id],
             replace_existing=True,
-            misfire_grace_time=GRACE,
+            misfire_grace_time=GRACE_SECONDS,
             coalesce=True,
             max_instances=1,
         )

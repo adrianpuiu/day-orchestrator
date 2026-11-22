@@ -10,20 +10,28 @@ and sweeps must fire once — never zero times without a trace, never twice (rel
 
 ## Decision
 
-APScheduler 3.x `AsyncIOScheduler` with `SQLAlchemyJobstore` pointed at the shared
-SQLite file. Every scheduled **effect** carries a deterministic job id = dedup key
+APScheduler 3.x `AsyncIOScheduler` with the **in-memory job store**. Every
+scheduled **effect** carries a deterministic job id = dedup key
 (e.g. `brief-2026-11-22-morning`). Effect handlers check/claim the dedup key in
 `action_log` (unique constraint) before doing work, so:
 
 - normal fire → claimed, runs once;
-- restart/wake after a missed tick (within `misfire_grace_time`, `coalesce=True`) →
-  runs once, then claims;
+- restart/wake after a missed tick (within `misfire_grace_time`, `coalesce=true`)
+  → `ensure_daily` re-creates the date-scoped job on every boot, so the missed
+  effect runs once at startup, then claims;
 - process restarts between claim and effect completion → the unclaimed key reruns
   (at-least-once effects must be idempotent; email reads/triage are, sends are
   approval-gated anyway).
 
-Reminders are persisted rows with their own fire-time jobs recreated from rows on
-startup (jobstore is a cache, the row is the truth).
+Reminders are persisted rows with their own fire-time checks recreated by the
+60-second reminder tick (rows are the truth; the store is a cache).
+
+*Amendment (2026-11-22, live):* the original decision used a
+`SQLAlchemyJobStore` on the shared SQLite file; in practice APScheduler 3.11 +
+SQLAlchemy 2 silently failed to persist jobs (empty `apscheduler_jobs` after
+"Added job" logs). The store was dropped — it was redundant given
+`ensure_daily` + DB-row truth — and the semantics above are unchanged and
+verified by a start-fire test.
 
 ## Alternatives considered
 

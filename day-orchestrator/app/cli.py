@@ -55,6 +55,12 @@ def main() -> None:
         events = client.get_events(1)
         print(f"calendar OK: {len(events)} event(s) in the next day.")
     elif args.cmd == "run":
+        import logging
+
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        )
         from .runtime import Runtime
 
         asyncio.run(Runtime().start())

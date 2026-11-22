@@ -100,7 +100,6 @@ class Runtime:
         )
 
         self.scheduler = EffectScheduler(
-            self.cfg.db_path,
             self.cfg.timezone,
             handlers={"brief": self.run_briefing, "sweep": self.run_sweep},
             bus=self.bus,
