@@ -59,9 +59,21 @@ def list_open_bucketed(db: Database, tz: str = "local") -> dict[str, list[dict[s
 
 
 def as_brief_lines(buckets: dict[str, list[dict[str, Any]]]) -> str:
-    """Pre-rendered task lines for the brief; the planner copies them verbatim."""
+    """Pre-rendered task lines for the brief; the planner copies them verbatim.
+
+    Unfinished overdue tasks fold into Today with a carried marker — Today is
+    the single actionable list; the original due date stays visible.
+    """
     lines: list[str] = []
-    for name in BUCKET_ORDER:
+    for t in buckets.get("overdue", ()):
+        due = t.get("due") or ""
+        carried = f" · carried from {due}" if due else " · overdue"
+        suffix = f" — due {due}" if due else ""
+        lines.append(f"- [today{carried}] {t['title']}{suffix}")
+    for t in buckets.get("today", ()):
+        due = f" — due {t['due']}" if t.get("due") else ""
+        lines.append(f"- [today] {t['title']}{due}")
+    for name in ("tomorrow", "later", "someday"):
         for t in buckets.get(name, ()):
             due = f" — due {t['due']}" if t.get("due") else ""
             lines.append(f"- [{name}] {t['title']}{due}")

@@ -49,12 +49,15 @@ def test_list_open_bucketed_groups_in_order(tmp_path) -> None:
 def test_brief_lines_render_buckets_verbatim(tmp_path) -> None:
     db = make_db(tmp_path)
     tasks.add(db, "pay invoice", due="2026-11-21")
+    tasks.add(db, "call dentist", due="2026-11-22T14:00")
+    tasks.add(db, "renew hosting", due="2026-11-25")
     tasks.add(db, "call dentist")
     lines = tasks.as_brief_lines(tasks.list_open_bucketed(db))
     assert lines == (
-        "- [overdue] pay invoice — due 2026-11-21\n"
+        "- [today · carried from 2026-11-21] pay invoice — due 2026-11-21\n"
+        "- [today] call dentist — due 2026-11-22T14:00\n"
+        "- [later] renew hosting — due 2026-11-25\n"
         "- [someday] call dentist"
     )
-    assert tasks.as_brief_lines(
-        {"overdue": [], "today": [], "tomorrow": [], "later": [], "someday": []}
-    ) == "No open tasks."
+    empty = {"overdue": [], "today": [], "tomorrow": [], "later": [], "someday": []}
+    assert tasks.as_brief_lines(empty) == "No open tasks."
