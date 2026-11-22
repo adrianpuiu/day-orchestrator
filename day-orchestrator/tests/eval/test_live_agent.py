@@ -140,6 +140,23 @@ async def test_coordinator_email_goes_through_gate(runtime: Runtime) -> None:
     assert rt.gmail.sent == [], "nothing may send without approval"
 
 
+async def test_coordinator_calendar_write_goes_through_gate(runtime: Runtime) -> None:
+    rt = runtime
+    memory.set_value(rt.db, "paired_chat", 42)
+    await rt.bus.publish(
+        Event(TELEGRAM_COMMAND, {"text": "put dinner with Ana in my calendar "
+                                         "tomorrow at 19:00",
+                                 "chat_id": 42, "message_id": 3})
+    )
+    approvals = approval.list_pending(rt.db)
+    assert approvals, "add_calendar_event must pause behind an approval row"
+    kind = approvals[0].kind
+    assert kind == "create_calendar_event", f"wrong approval kind: {kind!r}"
+    assert rt.deps.calendar_writer.events == [], (
+        "nothing may be written to the calendar without approval"
+    )
+
+
 # --- brief readability: same local model judges against a fixed rubric --------
 
 async def test_brief_readability_judge(runtime: Runtime) -> None:

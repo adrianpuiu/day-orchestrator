@@ -160,6 +160,7 @@ flowchart LR
 3. **Gmail API adapter** — trigger: need server-side labels/push/quota headroom. Swap behind the unchanged tool interface (C3); medium cost.
 4. ~~**Calendar write access**~~ **Delivered (ADR-009 addendum)**: `add_calendar_event` writes via EventKit, send-class effect behind the unchanged approval gate; live-proven. Google-backend writes remain open.
 5. **Never unless real**: multi-user, horizontal scale, microservice split (−2 target stands).
+6. **ADK `SequentialAgent` → `Workflow` API migration** — ADK deprecation warning (2026-11-22): SequentialAgent will be removed in a future version; `Workflow` cannot yet be used as an `LlmAgent` sub-agent, so migrate only when ADK reaches parity. Cheap swap behind unchanged pipelines.
 
 ## Documentation & enforcement
 
