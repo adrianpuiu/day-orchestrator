@@ -110,6 +110,10 @@ class FakeCalendar:
         self.events: list[dict] = []
         self.fetched: list[int] = []
         self.update_calls: list[str] = []
+        self.access_status_value = 3  # preflight tests override to 0
+
+    def access_status(self) -> int:
+        return self.access_status_value
 
     def get_events(self, days: int) -> list[dict]:
         self.fetched.append(days)

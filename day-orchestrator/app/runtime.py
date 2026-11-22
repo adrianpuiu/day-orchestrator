@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -74,6 +75,42 @@ def _transient_model_error(exc: Exception) -> bool:
             "service unavailable",
         )
     )
+
+
+class _AttemptFailure(Exception):
+    """Wraps an agent-attempt exception together with its produced-event count."""
+
+    def __init__(self, produced: int, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.produced = produced
+        self.cause = cause
+
+
+async def _retry_async(
+    attempt: Callable[[], Awaitable[tuple[str, int]]],
+    attempts: int = 3,
+    backoff: float = 2.0,
+) -> tuple[str, int]:
+    """Runs `attempt`, retrying transient model failures that produced nothing."""
+    last: _AttemptFailure | None = None
+    for i in range(attempts):
+        try:
+            return await attempt()
+        except _AttemptFailure as failure:
+            last = failure
+            if (
+                i < attempts - 1
+                and failure.produced == 0
+                and _transient_model_error(failure.cause)
+            ):
+                log.warning(
+                    "transient model error (attempt %d/%d): %s; retrying",
+                    i + 1, attempts, failure.cause,
+                )
+                await asyncio.sleep(backoff * (i + 1))
+                continue
+            raise failure.cause from None
+    raise last.cause if last else RuntimeError("no attempts")
 
 
 class NullNotifier:
@@ -319,9 +356,9 @@ class Runtime:
         except Exception:
             pass  # session exists (e.g. persistent Telegram threads)
         final = ""
-        produced = 0
-        for attempt in range(3):
-            final, produced = "", 0
+
+        async def attempt() -> tuple[str, int]:
+            local_final, produced = "", 0
             try:
                 async for event in runner.run_async(
                     user_id=user_id, session_id=session_id, new_message=message
@@ -332,21 +369,14 @@ class Runtime:
                         and event.content
                         and event.content.parts
                     ):
-                        final = "".join(
+                        local_final = "".join(
                             part.text or "" for part in event.content.parts
                         ).strip()
-                return final
             except Exception as exc:
-                # Retry transient model-endpoint failures only before the run
-                # produced anything — zero double-processing risk.
-                if attempt < 2 and produced == 0 and _transient_model_error(exc):
-                    log.warning(
-                        "transient model error (attempt %d/3): %s; retrying",
-                        attempt + 1, exc,
-                    )
-                    await asyncio.sleep(2 * (attempt + 1))
-                    continue
-                raise
+                raise _AttemptFailure(produced, exc) from exc
+            return local_final, produced
+
+        final, _produced = await _retry_async(attempt)
         return final
 
     async def run_briefing(self, dedup_key: str) -> None:
