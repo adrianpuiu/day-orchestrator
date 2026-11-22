@@ -32,7 +32,10 @@ class Config:
     # (architecture.md evolution step 2), specs are bare model ids.
     model_api_base: str = ""
     model_api_key: str = "EMPTY"
-    calendar_backend: str = "apple"  # "apple" (EventKit, ADR-009) | "google"
+    calendar_backend: str = "apple" # "apple" (EventKit, ADR-009) | "google"
+    # Apple backend: target calendar title for writes ("" = macOS default,
+    # which is a sticky per-app setting and often surprises)
+    calendar_target: str = ""
     gmail_poll_seconds: int = 180  # IDLE fallback poll (ADR-002)
     max_overnight_emails: int = 50
     # C10 notification budget: max proactive pushes per category per day

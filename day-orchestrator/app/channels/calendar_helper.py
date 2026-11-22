@@ -38,6 +38,10 @@ def main() -> None:
         help="comma-separated emails; recorded in the event notes (EventKit "
              "has no public API for real attendees)",
     )
+    p_create.add_argument(
+        "--calendar", default="",
+        help="target calendar title; empty = system default for new events",
+    )
     sub.add_parser("status")
     args = parser.parse_args()
 
@@ -115,7 +119,20 @@ def main() -> None:
         return
 
     # create-event
-    calendar = store.defaultCalendarForNewEvents()
+    calendar = None
+    if args.calendar:
+        for c in store.calendars() or []:
+            if c.title() == args.calendar and c.allowsContentModifications():
+                calendar = c
+                break
+        if calendar is None:
+            available = ", ".join(
+                sorted({c.title() for c in (store.calendars() or [])})
+            )
+            _die(f"calendar {args.calendar!r} not found or read-only; "
+                 f"available: {available}", 1)
+    if calendar is None:
+        calendar = store.defaultCalendarForNewEvents()
     if calendar is None:
         _die("no writable calendar found", 2)
     event = EK.EKEvent.eventWithEventStore_(store)

@@ -33,8 +33,10 @@ class AppleCalendarClient:
         self,
         *,
         runner: Callable[[list[str]], dict[str, Any]] | None = None,
+        target_calendar: str = "",
     ) -> None:
         self._runner = runner  # test seam
+        self._target = target_calendar  # empty = system default
 
     def _run(self, args: list[str]) -> dict[str, Any]:
         if self._runner is not None:
@@ -70,6 +72,8 @@ class AppleCalendarClient:
         real invitations go through the gated send_email tool.
         """
         args = ["create-event", "--title", title, "--start", start_iso, "--end", end_iso]
+        if self._target:
+            args += ["--calendar", self._target]
         if notes:
             args += ["--notes", notes]
         if invitees:

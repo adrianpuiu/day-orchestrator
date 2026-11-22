@@ -27,7 +27,7 @@ def _build_root_agent():
     if cfg.calendar_backend == "apple":
         from .channels.calendar_apple import AppleCalendarClient
 
-        calendar = AppleCalendarClient()
+        calendar = AppleCalendarClient(target_calendar=cfg.calendar_target)
     else:
         calendar = CalendarClient(cfg.data_dir / "calendar_token.json")
     deps = ToolDeps(

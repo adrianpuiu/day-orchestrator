@@ -111,7 +111,7 @@ class Runtime:
         elif self.cfg.calendar_backend == "apple":
             from .channels.calendar_apple import AppleCalendarClient
 
-            self.calendar = AppleCalendarClient()
+            self.calendar = AppleCalendarClient(target_calendar=self.cfg.calendar_target)
         else:
             self.calendar = CalendarClient(
                 self.cfg.data_dir / "calendar_token.json",
