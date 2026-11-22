@@ -63,6 +63,19 @@ def _acquire_instance_lock(data_dir: Path, blocking: bool = False):
     return fh
 
 
+def _transient_model_error(exc: Exception) -> bool:
+    """True for model-endpoint hiccups worth retrying (connection/timeout/5xx)."""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(
+        marker in text
+        for marker in (
+            "connection error", "connection reset", "timed out", "timeout",
+            "internal server error", "rate limit", "apiconnectionerror",
+            "service unavailable",
+        )
+    )
+
+
 class NullNotifier:
     """Used when no Telegram token is configured; briefs stay in the log."""
 
@@ -269,17 +282,34 @@ class Runtime:
         except Exception:
             pass  # session exists (e.g. persistent Telegram threads)
         final = ""
-        async for event in runner.run_async(
-            user_id=user_id, session_id=session_id, new_message=message
-        ):
-            if (
-                event.is_final_response()
-                and event.content
-                and event.content.parts
-            ):
-                final = "".join(
-                    part.text or "" for part in event.content.parts
-                ).strip()
+        produced = 0
+        for attempt in range(3):
+            final, produced = "", 0
+            try:
+                async for event in runner.run_async(
+                    user_id=user_id, session_id=session_id, new_message=message
+                ):
+                    produced += 1
+                    if (
+                        event.is_final_response()
+                        and event.content
+                        and event.content.parts
+                    ):
+                        final = "".join(
+                            part.text or "" for part in event.content.parts
+                        ).strip()
+                return final
+            except Exception as exc:
+                # Retry transient model-endpoint failures only before the run
+                # produced anything — zero double-processing risk.
+                if attempt < 2 and produced == 0 and _transient_model_error(exc):
+                    log.warning(
+                        "transient model error (attempt %d/3): %s; retrying",
+                        attempt + 1, exc,
+                    )
+                    await asyncio.sleep(2 * (attempt + 1))
+                    continue
+                raise
         return final
 
     async def run_briefing(self, dedup_key: str) -> None:
