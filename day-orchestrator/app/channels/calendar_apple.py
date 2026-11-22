@@ -85,6 +85,14 @@ class AppleCalendarClient:
         return out
 
 
+    def access_status(self) -> int:
+        """0 not determined, 2 denied, 3 authorized. Passive; prompts nothing."""
+        import EventKit as EK
+
+        if self._auth_status_fn is not None:
+            return int(self._auth_status_fn(EK, None))
+        return int(EK.EKEventStore.authorizationStatusForEntityType_(EK.EKEntityTypeEvent))
+
     def create_event(self, title: str, start_iso: str, end_iso: str) -> str:
         """Write: create an event in the default calendar; returns its id."""
         import EventKit as EK

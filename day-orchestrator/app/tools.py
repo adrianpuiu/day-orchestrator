@@ -259,13 +259,14 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         # draft while the run was paused (ADR-004 Edit).
         try:
             return await execute(row)
-        except Exception:
+        except Exception as exc:
             log.exception("approved effect failed (approval %s)", row.id)
             actionlog.log(deps.db, "gate", "send_failed", "send", approval_id=row.id)
             try:
                 await deps.notifier.send(
-                    f"❌ Approved action ({escape_html(row.kind)}) failed "
-                    "— check logs. It will NOT be retried automatically.",
+                    f"❌ Approved action ({escape_html(row.kind)}) failed: "
+                    f"{escape_html(str(exc)[:200])} — it will NOT be retried "
+                    "automatically.",
                     "triage_alerts",
                 )
             except Exception:

@@ -185,8 +185,27 @@ class Runtime:
         )
         self._watcher.start()
         log.info("runtime started (db=%s)", self.cfg.db_path)
+        await self._preflight_calendar_consent()
         await self._stop.wait()
         await self.shutdown()
+
+    async def _preflight_calendar_consent(self) -> None:
+        """One-time informational push when the agent's calendar access is
+        ungranted (TCC keys consent per process context; ADR-009)."""
+        if self.cfg.calendar_backend != "apple":
+            return
+        if not hasattr(self.calendar, "access_status"):
+            return
+        try:
+            if self.calendar.access_status() != 3:
+                await self.notifier.send(
+                    "Calendar access isn't granted to the background service "
+                    "yet. The next calendar action pops a macOS dialog — click "
+                    "OK within 2 minutes and it will be remembered.",
+                    "triage_alerts",
+                )
+        except Exception:
+            log.exception("calendar consent preflight failed")
 
     async def shutdown(self) -> None:
         if self._watcher is not None:
