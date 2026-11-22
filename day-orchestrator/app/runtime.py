@@ -321,12 +321,23 @@ class Runtime:
                 return
 
         session_id = f"tg-{chat_id}"
-        reply = await self._run_agent(
-            self.coordinator_app.root_agent,
-            f"tg:{chat_id}",
-            session_id,
-            gtypes.Content(role="user", parts=[gtypes.Part.from_text(text=text)]),
-        )
+        typing = self.telegram.start_typing()
+        try:
+            reply = await self._run_agent(
+                self.coordinator_app.root_agent,
+                f"tg:{chat_id}",
+                session_id,
+                gtypes.Content(role="user", parts=[gtypes.Part.from_text(text=text)]),
+            )
+        except Exception:
+            log.exception("coordinator failed for chat %s", chat_id)
+            await self.telegram.send_message(
+                "⚠️ Something broke while answering — the failure is in the logs.",
+                "reminders",
+            )
+            return
+        finally:
+            typing.cancel()
         if reply:
             await self.telegram.send_message(markdown_to_telegram_html(reply), "reminders")
 

@@ -84,6 +84,9 @@ class FakeTelegram:
     def set_owner_chat_id(self, chat_id: int | None) -> None:
         pass
 
+    def start_typing(self) -> Any:
+        return asyncio.create_task(asyncio.sleep(3600))
+
     async def start(self) -> None:
         pass
 

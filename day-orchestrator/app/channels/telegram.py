@@ -132,6 +132,21 @@ class TelegramChannel:
         await self._bot.session.close()
         log.info("telegram polling stopped")
 
+    def start_typing(self) -> asyncio.Task:
+        """Repeat the typing chat action until cancelled (Telegram shows ~5s each)."""
+        async def _loop() -> None:
+            try:
+                chat_id = self._target_chat_id()
+                while True:
+                    await self._bot.send_chat_action(chat_id=chat_id, action="typing")
+                    await asyncio.sleep(4)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.warning("typing indicator failed", exc_info=True)
+
+        return asyncio.create_task(_loop())
+
     async def send(self, text: str, category: str) -> dict[str, Any]:
         """NotifierProto entry (category unused here; budget enforced upstream)."""
         return await self.send_message(text, category)

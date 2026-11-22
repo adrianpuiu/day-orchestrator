@@ -18,9 +18,11 @@ def resolve_model(cfg: Config, spec: str):
     if not cfg.model_api_base:
         return spec
     from google.adk.models.lite_llm import LiteLlm
+    from google.genai import types as gtypes
 
     return LiteLlm(
         model=f"openai/{spec}",
         api_base=cfg.model_api_base,
         api_key=cfg.model_api_key,
+        retry_options=gtypes.HttpRetryOptions(attempts=3),
     )
