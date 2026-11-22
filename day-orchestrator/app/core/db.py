@@ -10,12 +10,23 @@ import sqlite3
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 SCHEMA_VERSION = 1
 
 SCHEMA = [
     "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    """
+    CREATE TABLE IF NOT EXISTS email_triage (
+        uid TEXT PRIMARY KEY,           -- email Message-ID
+        summary TEXT NOT NULL,
+        category TEXT NOT NULL,         -- triage taxonomy (needs_reply, ...)
+        importance TEXT NOT NULL,       -- low | normal | high
+        created_at TEXT NOT NULL        -- first-seen ISO (INSERT OR IGNORE)
+    )
+    """,
     """
     CREATE TABLE IF NOT EXISTS approvals (
         id TEXT PRIMARY KEY,
@@ -138,3 +149,34 @@ class Database:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+
+def persist_triage(db: Database, items: list[dict[str, Any]]) -> int:
+    """First-seen INSERT OR IGNORE of triage items; returns how many were new."""
+    now = datetime.now(UTC).isoformat(timespec="seconds")
+    new = 0
+    for item in items:
+        uid = str(item.get("uid") or "")
+        if not uid:
+            continue
+        cur = db.execute(
+            "INSERT OR IGNORE INTO email_triage "
+            "(uid, summary, category, importance, created_at) VALUES (?,?,?,?,?)",
+            (uid, str(item.get("summary", "")), str(item.get("category", "other")),
+             str(item.get("importance", "normal")), now),
+        )
+        new += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+    return new
+
+
+def needs_reply_open(db: Database, days: int = 7, limit: int = 10) -> list[dict]:
+    """needs_reply emails first seen within `days`, newest first (BFS: the
+    sweep and the brief both render from this one query)."""
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat(timespec="seconds")
+    rows = db.query(
+        "SELECT uid, summary, importance, created_at FROM email_triage "
+        "WHERE category='needs_reply' AND created_at>=? "
+        "ORDER BY created_at DESC LIMIT ?",
+        (cutoff, limit),
+    )
+    return [dict(r) for r in rows]

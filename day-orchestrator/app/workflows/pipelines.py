@@ -16,7 +16,7 @@ from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
 
 from ..channels.calendar import CalendarNotConfigured
-from ..core import actionlog, budget, memory, tasks
+from ..core import actionlog, budget, tasks
 from ..core.config import Config
 from ..core.textfmt import escape_html, markdown_to_telegram_html
 from ..tools import ToolDeps, make_tools
@@ -90,15 +90,33 @@ class PushText(BaseAgent):
         yield Event(author=self.name)
 
 
+class PersistTriage(BaseAgent):
+    """Deterministic: writes triage results to email_triage (first-seen wins).
+    Both pipelines run it right after the TriageAgent; the sweep and the brief
+    read the table, never session memory."""
+
+    deps: Any = None
+
+    async def _run_async_impl(self, ctx: InvocationContext):
+        from app.core.db import persist_triage
+
+        triage = _extract_json(ctx.session.state.get("triage_json"))
+        items = triage.get("items", []) if isinstance(triage, dict) else []
+        new = persist_triage(self.deps.db, items)
+        if new:
+            actionlog.log(self.deps.db, "pipeline", "triage_persisted", "system",
+                          detail={"new": new})
+        yield Event(author=self.name)
+
+
 class AlertHigh(BaseAgent):
-    """W2 tail: store triage results; push a digest of high-importance mail."""
+    """W2 tail: push a digest of high-importance mail."""
 
     deps: Any = None
     cfg: Any = None
 
     async def _run_async_impl(self, ctx: InvocationContext):
         triage = _extract_json(ctx.session.state.get("triage_json"))
-        memory.set_value(self.deps.db, "last_triage", triage)
         items = triage.get("items", []) if isinstance(triage, dict) else []
         high = [i for i in items if i.get("importance") == "high"]
         if not high:
@@ -152,9 +170,20 @@ def briefing_loader(deps: ToolDeps, cfg: Config) -> Callable[[], Awaitable[dict[
             "task_lines": tasks.as_brief_lines(
                 tasks.list_open_bucketed(deps.db, cfg.timezone)
             ),
+            "needs_reply_lines": _needs_reply_lines(deps.db),
         }
 
     return loader
+
+
+def _needs_reply_lines(db) -> str:
+    """Pre-rendered 'Awaiting your reply' lines (needs_reply, last 7 days)."""
+    from app.core.db import needs_reply_open
+
+    items = needs_reply_open(db, days=7, limit=5)
+    if not items:
+        return "None."
+    return "\n".join(f"- {item['summary']}" for item in items)
 
 
 def incoming_loader(emails: list[dict[str, Any]]) -> Callable[[], Awaitable[dict[str, str]]]:
@@ -179,6 +208,7 @@ def make_briefing_pipeline(deps: ToolDeps, cfg: Config) -> SequentialAgent:
         sub_agents=[
             LoadState(name="load_briefing_inputs", loader=briefing_loader(deps, cfg)),
             wf_agents.make_triage_agent(cfg),
+            PersistTriage(name="persist_triage", deps=deps),
             wf_agents.make_task_extractor(cfg, _tool_named(tools, "add_task")),
             wf_agents.make_planner_agent(cfg),
             PushText(name="push_briefing", deps=deps, cfg=cfg),
@@ -189,12 +219,13 @@ def make_briefing_pipeline(deps: ToolDeps, cfg: Config) -> SequentialAgent:
 def make_incoming_pipeline(
     deps: ToolDeps, cfg: Config, emails: list[dict[str, Any]]
 ) -> SequentialAgent:
-    """W2 New-mail triage: triage → store + alert on high importance."""
+    """W2 New-mail triage: triage → persist + alert on high importance."""
     return SequentialAgent(
         name="incoming_pipeline",
         sub_agents=[
             LoadState(name="load_incoming", loader=incoming_loader(emails)),
             wf_agents.make_triage_agent(cfg),
+            PersistTriage(name="persist_triage", deps=deps),
             AlertHigh(name="alert_high", deps=deps, cfg=cfg),
         ],
     )

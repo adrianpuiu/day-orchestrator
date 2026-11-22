@@ -412,8 +412,9 @@ class Runtime:
     async def run_sweep(self, dedup_key: str) -> None:
         if not actionlog.claim(self.db, dedup_key, "scheduler"):
             return
-        last = memory.get_value(self.db, "last_triage") or {}
-        items = [i for i in last.get("items", []) if i.get("category") == "needs_reply"]
+        from .core.db import needs_reply_open
+
+        items = needs_reply_open(self.db, days=7, limit=10)
         if not items:
             return
         replied = self._replied_message_ids()

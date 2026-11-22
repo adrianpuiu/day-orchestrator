@@ -46,6 +46,9 @@ One short paragraph: what today looks like given the schedule and tasks.
 Copy the calendar lines EXACTLY as given, one per line, keeping times and
 bullet format. If the first line says the calendar is not configured or
 unavailable, output just that line — do not claim the calendar is clear.
+## Awaiting your reply
+Copy the needs_reply lines EXACTLY as given, one per line. If the first line
+says "None.", write "None awaiting reply." — do not invent emails.
 ## Tasks
 Copy the task lines EXACTLY as given, keeping the [bucket] labels and order
 (overdue first). If the first line says "No open tasks.", output exactly that.

@@ -157,6 +157,35 @@ async def test_coordinator_calendar_write_goes_through_gate(runtime: Runtime) ->
     )
 
 
+async def test_w2_pipeline_persists_triage(runtime: Runtime) -> None:
+    """W2's PersistTriage stage must land classifications in email_triage —
+    the sweep and the brief read the table, never session memory."""
+    rt = runtime
+    rows = rt.db.query("SELECT uid FROM email_triage")
+    assert not rows, "eval starts with a clean triage table"
+
+    from app.workflows.pipelines import make_incoming_pipeline
+
+    pipeline = make_incoming_pipeline(rt.deps, rt.cfg, [
+        {"uid": "<quote@x>", "message_id": "<quote@x>",
+         "subject": "Question about the quote",
+         "snippet": "Hi, can you send me the updated quote for the website?",
+         "date": "2026-11-22T10:00:00+00:00"},
+    ])
+    await rt._run_agent(
+        pipeline, "test:w2", "w2-persist",
+        _content("run"),
+    )
+    rows = rt.db.query("SELECT uid, category FROM email_triage")
+    assert rows, "W2 must persist triage results deterministically"
+
+
+def _content(text: str):
+    from google.genai import types as gtypes
+
+    return gtypes.Content(role="user", parts=[gtypes.Part.from_text(text=text)])
+
+
 async def test_coordinator_edit_goes_through_gate(runtime: Runtime) -> None:
     rt = runtime
     memory.set_value(rt.db, "paired_chat", 42)
