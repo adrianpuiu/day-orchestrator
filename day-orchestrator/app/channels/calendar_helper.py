@@ -47,6 +47,19 @@ def main() -> None:
         help="fire an alert N minutes before the event (0 = no alarm)",
     )
     sub.add_parser("status")
+    p_upd = sub.add_parser("update-event")
+    p_upd.add_argument("--id", required=True)
+    p_upd.add_argument("--title")
+    p_upd.add_argument("--start")
+    p_upd.add_argument("--end")
+    p_del = sub.add_parser("delete-event")
+    p_del.add_argument("--id", required=True)
+    p_meta = sub.add_parser("get-event")
+    p_meta.add_argument("--id", required=True)
+    p_create.add_argument(
+        "--recurrence", default="",
+        help="'daily' or 'weekly:MO,TU,WE,TH,FR,SA,SU' (repeat forever)",
+    )
     args = parser.parse_args()
 
     import EventKit as EK
@@ -113,6 +126,7 @@ def main() -> None:
             )
             out.append(
                 {
+                    "id": str(ev.eventIdentifier()),
                     "start": start.isoformat(timespec="minutes"),
                     "end": end_dt.isoformat(timespec="minutes"),
                     "summary": str(ev.title() or "(untitled)"),
@@ -120,6 +134,57 @@ def main() -> None:
                 }
             )
         print(json.dumps({"events": out}))
+        return
+
+    if args.cmd == "get-event":
+        ev = store.eventWithIdentifier_(args.id)
+        if ev is None:
+            _die(f"event {args.id} not found", 1)
+        start = datetime.fromtimestamp(
+            ev.startDate().timeIntervalSince1970()).astimezone()
+        print(json.dumps({
+            "id": args.id,
+            "title": str(ev.title() or "(untitled)"),
+            "start": start.isoformat(timespec="minutes"),
+            "calendar": str(ev.calendar().title() or ""),
+        }))
+        return
+
+    if args.cmd == "update-event":
+        ev = store.eventWithIdentifier_(args.id)
+        if ev is None:
+            _die(f"event {args.id} not found", 1)
+        if args.title:
+            ev.setTitle_(args.title)
+        if args.start:
+            ev.setStartDate_(
+                EK_NSDATE_from(datetime.fromisoformat(args.start).astimezone())
+            )
+        if args.end:
+            ev.setEndDate_(
+                EK_NSDATE_from(datetime.fromisoformat(args.end).astimezone())
+            )
+        ok, error = store.saveEvent_span_commit_error_(
+            ev, EK.EKSpanThisEvent, True, None
+        )
+        if not ok:
+            _die(f"EventKit update failed: {error}", 1)
+        print(json.dumps({"event_id": args.id, "title": str(ev.title() or "")}))
+        return
+
+    if args.cmd == "delete-event":
+        ev = store.eventWithIdentifier_(args.id)
+        if ev is None:
+            _die(f"event {args.id} not found", 1)
+        # FutureEvents: for recurring events this removes this and all future
+        # occurrences (the whole series from now on); for single events it is
+        # exactly that event. Edits keep EKSpanThisEvent (move one occurrence).
+        ok, error = store.removeEvent_span_commit_error_(
+            ev, EK.EKSpanFutureEvents, True, None
+        )
+        if not ok:
+            _die(f"EventKit delete failed: {error}", 1)
+        print(json.dumps({"deleted": args.id, "title": str(ev.title() or "")}))
         return
 
     # create-event
@@ -159,12 +224,37 @@ def main() -> None:
         event.addAlarm_(
             EK.EKAlarm.alarmWithRelativeOffset_(-args.alarm_minutes * 60.0)
         )
+    if args.recurrence:
+        rule = _recurrence_rule(args.recurrence)
+        if rule is None:
+            _die(f"unsupported recurrence {args.recurrence!r}", 1)
+        event.setRecurrenceRule_(rule)
     ok, error = store.saveEvent_span_commit_error_(
         event, EK.EKSpanThisEvent, True, None
     )
     if not ok:
         _die(f"EventKit save failed: {error}", 1)
     print(json.dumps({"event_id": str(event.eventIdentifier())}))
+
+
+def _recurrence_rule(spec: str):
+    """'daily' or 'weekly:MO,TU,WE,TH,FR,SA,SU' -> EKRecurrenceRule or None."""
+    import EventKit as EK
+
+    spec = spec.strip().lower()
+    weekday_codes = {"su": "SU", "mo": "MO", "tu": "TU", "we": "WE",
+                     "th": "TH", "fr": "FR", "sa": "SA"}
+    if spec == "daily":
+        rrule = "FREQ=DAILY"
+    elif spec.startswith("weekly:"):
+        codes = [c.strip() for c in spec.split(":", 1)[1].split(",") if c.strip()]
+        days = [weekday_codes.get(c) for c in codes]
+        if not days or None in days:
+            return None
+        rrule = "FREQ=WEEKLY;BYDAY=" + ",".join(days)
+    else:
+        return None
+    return EK.EKRecurrenceRule.alloc().initWithRRULEString_(rrule)
 
 
 def EK_NSDATE_from(dt: datetime):

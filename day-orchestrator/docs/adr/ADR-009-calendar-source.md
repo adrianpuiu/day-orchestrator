@@ -50,3 +50,8 @@ to construct `EKParticipant` objects, so invitees land in the event notes
 Alarms are supported (`EKAlarm` relative offset): `add_calendar_event` defaults
 to 30 minutes before the start (0 disables); they sync to the iPhone via
 iCloud. Calendar.app may layer its own per-calendar default alert on top.
+Also same day: recurrence (`daily` / `weekly:MO,TH` via `EKRecurrenceRule`
+RRULE strings), and `edit_calendar_event` / `delete_calendar_event` —
+edits apply to a single occurrence (`EKSpanThisEvent`), deletes remove the
+event and all future occurrences (`EKSpanFutureEvents`); both gated.
+`get_events` now exposes the EventKit `id`, which those tools consume.

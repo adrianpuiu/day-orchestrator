@@ -96,6 +96,36 @@ def test_zero_alarm_omits_flag() -> None:
     assert not any("--alarm-minutes" in a for a in captured[0])
 
 
+def test_update_and_delete_arg_mapping() -> None:
+    captured: list[list[str]] = []
+
+    def runner(args: list[str]) -> dict:
+        captured.append(args)
+        return {"ok": True}
+
+    client = AppleCalendarClient(runner=runner)
+    client.update_event("ek-9", title="Nou", end="2026-11-24T11:00")
+    client.delete_event("ek-9")
+
+    assert captured == [
+        ["update-event", "--id", "ek-9", "--title", "Nou", "--end",
+         "2026-11-24T11:00"],
+        ["delete-event", "--id", "ek-9"],
+    ]
+
+
+def test_recurrence_flag_is_passed() -> None:
+    captured: list[list[str]] = []
+
+    client = AppleCalendarClient(
+        runner=lambda args: (captured.append(args), {"event_id": "ek-4"})[1]
+    )
+    client.create_event("Sala", "2026-11-23T18:00", "2026-11-23T19:00",
+                        recurrence="weekly:MO,TH")
+
+    assert captured[0][captured[0].index("--recurrence") + 1] == "weekly:MO,TH"
+
+
 def test_permission_exit_maps_to_denied() -> None:
     def runner(args: list[str]) -> dict:
         raise CalendarPermissionDenied(

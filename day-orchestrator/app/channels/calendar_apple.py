@@ -66,24 +66,56 @@ class AppleCalendarClient:
         notes: str = "",
         invitees: list[str] | None = None,
         alarm_minutes: int = 0,
+        recurrence: str = "",
     ) -> str:
         """Write: create an event in the default calendar; returns its id.
 
         Invitees land in the notes (EventKit has no public attendee API);
         real invitations go through the gated send_email tool.
         alarm_minutes > 0 attaches an alert N minutes before the start.
+        recurrence: 'daily' or 'weekly:MO,TU,...' (see helper).
         """
         args = ["create-event", "--title", title, "--start", start_iso, "--end", end_iso]
         if self._target:
             args += ["--calendar", self._target]
         if alarm_minutes > 0:
             args += ["--alarm-minutes", str(alarm_minutes)]
+        if recurrence:
+            args += ["--recurrence", recurrence]
         if notes:
             args += ["--notes", notes]
         if invitees:
             args += ["--invitees", ",".join(invitees)]
         data = self._run(args)
         return str(data["event_id"])
+
+    def get_event_meta(self, event_id: str) -> dict[str, Any] | None:
+        """Passive: title/start/calendar of one event; None if missing."""
+        try:
+            return self._run(["get-event", "--id", event_id])
+        except RuntimeError:
+            return None
+
+    def update_event(
+        self,
+        event_id: str,
+        title: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> dict[str, Any]:
+        """Write: change title and/or start/end of one event."""
+        args = ["update-event", "--id", event_id]
+        if title:
+            args += ["--title", title]
+        if start:
+            args += ["--start", start]
+        if end:
+            args += ["--end", end]
+        return self._run(args)
+
+    def delete_event(self, event_id: str) -> dict[str, Any]:
+        """Write: delete one event."""
+        return self._run(["delete-event", "--id", event_id])
 
     def access_status(self) -> int:
         """0 not determined, 2 denied, 3 authorized. Passive; prompts nothing."""

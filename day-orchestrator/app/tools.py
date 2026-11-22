@@ -381,6 +381,90 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             execute=execute,
         )
 
+    @effect(Effect.SEND)
+    async def edit_calendar_event(
+        tool_context: ToolContext,
+        event_id: str,
+        new_start: str | None = None,
+        new_end: str | None = None,
+        new_title: str | None = None,
+    ) -> dict[str, Any]:
+        """Moves or renames an existing calendar event. REQUIRES owner approval
+        via Telegram before writing.
+
+        Args:
+            event_id: The event's 'id' from get_upcoming_events.
+            new_start: New ISO datetime (e.g. moving to another day/hour).
+            new_end: New ISO datetime for the end.
+            new_title: New title.
+        """
+        if not (new_start or new_end or new_title):
+            return {"status": "error", "error": "nothing to change"}
+
+        async def execute(row: approval.Approval) -> dict[str, Any]:
+            final = dict(row.payload)
+            result = deps.calendar_writer.update_event(
+                final["event_id"],
+                title=final.get("new_title"),
+                start=final.get("new_start"),
+                end=final.get("new_end"),
+            )
+            actionlog.log(
+                deps.db, "gate", "calendar_event_updated", "send", approval_id=row.id,
+                detail=final,
+            )
+            return {"status": "updated", "title": result.get("title"),
+                    "approval_id": row.id}
+
+        meta = deps.calendar.get_event_meta(event_id)
+        payload = {
+            "event_id": event_id,
+            "old_title": (meta or {}).get("title", event_id),
+            "new_start": new_start, "new_end": new_end, "new_title": new_title,
+        }
+        changes = ", ".join(
+            k for k, v in (("start", new_start), ("end", new_end),
+                           ("title", new_title)) if v
+        )
+        return await _gated(
+            tool_context, "edit_calendar_event", payload,
+            hint=f"Edit event {changes}?",
+            execute=execute,
+        )
+
+    @effect(Effect.SEND)
+    async def delete_calendar_event(
+        tool_context: ToolContext,
+        event_id: str,
+    ) -> dict[str, Any]:
+        """Deletes an existing calendar event. REQUIRES owner approval via
+        Telegram before writing.
+
+        Args:
+            event_id: The event's 'id' from get_upcoming_events.
+        """
+
+        async def execute(row: approval.Approval) -> dict[str, Any]:
+            final = dict(row.payload)
+            result = deps.calendar_writer.delete_event(final["event_id"])
+            actionlog.log(
+                deps.db, "gate", "calendar_event_deleted", "send", approval_id=row.id,
+                detail={**final, "title": result.get("title", "")},
+            )
+            return {"status": "deleted", "approval_id": row.id}
+
+        meta = deps.calendar.get_event_meta(event_id)
+        payload = {
+            "event_id": event_id,
+            "old_title": (meta or {}).get("title", event_id),
+            "old_start": (meta or {}).get("start", ""),
+        }
+        return await _gated(
+            tool_context, "delete_calendar_event", payload,
+            hint="Delete this event?",
+            execute=execute,
+        )
+
     return [
         FunctionTool(list_recent_emails),
         FunctionTool(read_email),
@@ -393,4 +477,6 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         FunctionTool(notify_user),
         FunctionTool(send_email),
         FunctionTool(add_calendar_event),
+        FunctionTool(edit_calendar_event),
+        FunctionTool(delete_calendar_event),
     ]

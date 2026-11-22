@@ -117,10 +117,31 @@ class FakeCalendar:
     def create_event(self, title: str, start: str, end: str,
                      notes: str = "", invitees: list[str] | None = None,
                      alarm_minutes: int = 0) -> str:
-        self.events.append({"title": title, "start": start, "end": end,
-                            "notes": notes, "invitees": invitees or [],
+        event_id = f"ek-{len(self.events) + 1}"
+        self.events.append({"id": event_id, "title": title, "start": start,
+                            "end": end, "notes": notes,
+                            "invitees": invitees or [],
                             "alarm_minutes": alarm_minutes})
-        return f"ek-{len(self.events)}"
+        return event_id
+
+    def get_event_meta(self, event_id: str) -> dict | None:
+        return next((e for e in self.events if e["id"] == event_id), None)
+
+    def update_event(self, event_id: str, title=None, start=None, end=None) -> dict:
+        ev = self.get_event_meta(event_id)
+        if ev is None:
+            raise RuntimeError(f"event {event_id} not found")
+        for key, value in (("title", title), ("start", start), ("end", end)):
+            if value:
+                ev[key] = value
+        return {"event_id": event_id, "title": ev["title"]}
+
+    def delete_event(self, event_id: str) -> dict:
+        ev = self.get_event_meta(event_id)
+        if ev is None:
+            raise RuntimeError(f"event {event_id} not found")
+        self.events.remove(ev)
+        return {"deleted": event_id, "title": ev["title"]}
 
 
 async def run_gate_scenario(

@@ -263,6 +263,25 @@ class Runtime:
             alarm = int(p.get("alarm_minutes") or 0)
             if alarm:
                 summary += f"\nAlarm: {alarm} min before"
+        elif row.kind == "edit_calendar_event":
+            changes = ", ".join(
+                f"{k}: {escape_html(str(v))}"
+                for k, v in (("new start", p.get("new_start")),
+                             ("new end", p.get("new_end")),
+                             ("new title", p.get("new_title")))
+                if v
+            )
+            summary = (
+                "<b>Edit this calendar event?</b>\n"
+                f"{escape_html(str(p.get('old_title', '')))}\n"
+                f"change: {changes or 'nothing'}"
+            )
+        elif row.kind == "delete_calendar_event":
+            summary = (
+                "<b>Delete this calendar event?</b>\n"
+                f"{escape_html(str(p.get('old_title', '')))}\n"
+                f"{escape_html(str(p.get('old_start', '')))}"
+            )
         else:
             summary = (
                 "<b>Send this email?</b>\n"

@@ -122,6 +122,17 @@ class CalendarClient:
         """Passive: OAuth consent is established at setup, so always authorized."""
         return 3
 
+    def get_event_meta(self, event_id: str) -> dict[str, Any] | None:
+        return None  # read-only backend
+
+    def update_event(self, event_id, title=None, start=None, end=None) -> dict:
+        raise RuntimeError("google calendar backend is read-only; "
+                           "switch calendar_backend to 'apple'")
+
+    def delete_event(self, event_id: str) -> dict:
+        raise RuntimeError("google calendar backend is read-only; "
+                           "switch calendar_backend to 'apple'")
+
     def get_events(self, days: int) -> list[dict[str, Any]]:
         """Return primary-calendar events from now through now + days."""
         now = datetime.now().astimezone()
