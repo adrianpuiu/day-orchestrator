@@ -4,7 +4,7 @@
 <!-- Day Orchestrator keep-alive agent (ADR-006 ops wrapper).
      Install:
        cp ops/launchd/com.agp.day-orchestrator.plist ~/Library/LaunchAgents/
-       # edit the two /Users/agp paths if the repo moves
+       # generate with `uv run python -m app.cli install` (paths are filled in automatically)
        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agp.day-orchestrator.plist
      Logs: ~/Library/Application Support/day-orchestrator/logs/
 -->

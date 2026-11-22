@@ -5,6 +5,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
+import os
+import plistlib
+import shutil
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -16,6 +21,111 @@ KNOWN_SECRETS = {
     "GMAIL_ADDRESS": "the Gmail address to manage",
     "GMAIL_APP_PASSWORD": "Google app password — needs 2FA (docs/adr/ADR-002)",
 }  # stored in the project .env (git-ignored), Keychain as fallback
+
+AGENT_LABEL = "com.agp.day-orchestrator"
+
+
+def _render_agent_plist(project_root: Path, data_dir: Path) -> dict:
+    """launchd agent definition with this checkout's real paths (ADR-005/009:
+    the agent runs as the bundle's main process so TCC attributes EventKit
+    and geocoding consent to com.agp.day-orchestrator)."""
+    bundle = (project_root / "DayOrchestrator.app" / "Contents" / "MacOS"
+              / "DayOrchestrator")
+    log_dir = data_dir / "logs"
+    return {
+        "Label": AGENT_LABEL,
+        "ProgramArguments": [str(bundle), "serve"],
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "ThrottleInterval": 30,
+        "StandardOutPath": str(log_dir / "stdout.log"),
+        "StandardErrorPath": str(log_dir / "stderr.log"),
+        "EnvironmentVariables": {"PYTHONDONTWRITEBYTECODE": "1"},
+    }
+
+
+def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, check=False, **kw)
+
+
+def cmd_install() -> None:
+    if sys.platform != "darwin":
+        raise SystemExit("installer supports macOS only (EventKit + launchd).")
+    print("== Day Orchestrator installer ==")
+
+    if shutil.which("uv") is None:
+        raise SystemExit(
+            "uv is required. Install it with:\n"
+            "  curl -LsSf https://astral.sh/uv/install.sh | sh\n"
+            "then re-run this installer."
+        )
+
+    print("-- 1/5 dependencies (uv sync)")
+    if _run(["uv", "sync"]).returncode != 0:
+        raise SystemExit("uv sync failed — fix the error above and re-run.")
+
+    print("-- 2/5 config")
+    example = PROJECT_ROOT / "config.toml.example"
+    live = PROJECT_ROOT / "config.toml"
+    if live.exists():
+        print("   config.toml already exists — keeping it.")
+    elif example.exists():
+        live.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+        print("   created config.toml from config.toml.example "
+              "(empty model_api_base = Gemini API).")
+    else:
+        print("   no config.toml.example found — using built-in defaults.")
+
+    print("-- 3/5 secrets (input hidden; stored in .env)")
+    secrets = default_secrets(PROJECT_ROOT)
+    for name, help_text in KNOWN_SECRETS.items():
+        if secrets.get(name):
+            print(f"   {name} already set — skipping.")
+            continue
+        value = getpass.getpass(f"   {name} ({help_text}): ")
+        if value.strip():
+            secrets.set(name, value)
+        else:
+            print(f"   skipped {name} — you can set it later with "
+                  f"`uv run python -m app.cli set-secret {name}`")
+
+    print("-- 4/5 calendar consent (a macOS dialog may pop up — click OK)")
+    if sys.platform == "darwin":
+        try:
+            from .channels.calendar_apple import AppleCalendarClient
+
+            AppleCalendarClient().get_events(1)
+            print("   calendar access OK.")
+        except Exception as exc:
+            print(f"   calendar consent not completed ({exc}); "
+                  "re-run `uv run python -m app.cli auth-calendar` later.")
+
+    print("-- 5/5 always-on service (launchd)")
+    cfg = Config.load()
+    log_dir = cfg.data_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    plist_path = (Path.home() / "Library" / "LaunchAgents"
+                  / f"{AGENT_LABEL}.plist")
+    plist_path.write_bytes(
+        plistlib.dumps(_render_agent_plist(PROJECT_ROOT, cfg.data_dir),
+                       fmt=plistlib.FMT_XML)
+    )
+    uid = os.getuid()
+    _run(["launchctl", "bootout", f"gui/{uid}/{AGENT_LABEL}"])
+    result = _run(["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)])
+    if result.returncode != 0:
+        print(f"   bootstrap failed ({result.returncode}); start it with "
+              f"`launchctl kickstart -k gui/{uid}/{AGENT_LABEL}` after fixing.")
+    else:
+        print(f"   agent installed and started ({plist_path}).")
+
+    print(
+        "\n== Done. Last step (interactive): ==\n"
+        "1. Send /start to your bot on Telegram to pair this chat.\n"
+        "2. Tomorrow " + str(cfg.brief_time) + " you get the first brief.\n"
+        "Useful: `uv run python -m app.cli secrets` (list), "
+        "`... auth-calendar` (re-consent), `... smoke` (offline proof)."
+    )
 
 
 def main() -> None:
@@ -38,6 +148,10 @@ def main() -> None:
     )
 
     sub.add_parser("run", help="run the orchestrator (foreground; launchd wraps it)")
+    sub.add_parser(
+        "install",
+        help="guided installer: deps, config, secrets, calendar, launchd",
+    )
     sub.add_parser("eval-nightly", help="run live agent evals; alert Telegram on failure")
     sub.add_parser("smoke", help="offline proof of the approval gate")
 
@@ -138,6 +252,8 @@ def main() -> None:
                 timeout=15,
             )
             log.info("failure alert sent to chat %s", chat)
+    elif args.cmd == "install":
+        cmd_install()
     elif args.cmd == "smoke":
         from .smoke import run_smoke
 

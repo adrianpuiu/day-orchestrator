@@ -1,0 +1,24 @@
+# Day Orchestrator configuration. Copy to config.toml (the installer does this
+# automatically). Anything omitted uses built-in defaults.
+
+# Model serving: empty model_api_base = Gemini model strings via the API key;
+# set it to any OpenAI-compatible server and use bare model ids instead.
+model_api_base = ""
+
+# flash-class for triage batches, stronger for planning/coordinator
+# triage_model = "ds41"
+# planner_model = "ds41"
+# coordinator_model = "ds41"
+
+# Morning brief (local time) and the two follow-up sweeps
+brief_time = "07:00"
+sweep_times = ["13:00", "18:00"]
+
+# Daily push budgets per category (spam protection, C10)
+budgets = { briefing = 1, triage_alerts = 5, reminders = 20 }
+
+# Calendar: "apple" reads/writes Calendar.app via the bundle (ADR-009);
+# "google" is a read-only fallback. Writes land in calendar_target —
+# empty means the macOS default-for-new-events calendar.
+calendar_backend = "apple"
+calendar_target = ""

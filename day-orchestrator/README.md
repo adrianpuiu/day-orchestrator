@@ -1,11 +1,25 @@
 # Day Orchestrator
 
 Single-user agent orchestrator that organizes your day: Gmail (IMAP/SMTP) + Telegram,
-Google ADK (Python). Runs on your Mac; outbound-only networking; every email send is
-approval-gated via Telegram and audited in SQLite.
+Google ADK (Python). Runs on your Mac; outbound-only networking; email sends and
+calendar writes are approval-gated via Telegram and audited in SQLite.
 
 Docs: [`docs/architecture.md`](docs/architecture.md) (constraint set) ·
 [`docs/adr/`](docs/adr/) (ADR-001…010).
+
+## Quick start (macOS, ~5 minutes)
+
+```bash
+git clone <this-repo> && cd day-orchestrator
+curl -LsSf https://astral.sh/uv/install.sh | sh   # if uv is missing
+uv run python -m app.cli install
+```
+
+The installer walks through: dependencies → config (from `config.toml.example`,
+Gemini API by default) → secrets (Telegram token, Gmail app password — input
+hidden) → calendar consent (one macOS dialog) → the always-on launchd service.
+Then send `/start` to your bot on Telegram — done. Tomorrow's brief arrives at
+07:00; anything important emails push immediately.
 
 ## Layout
 
@@ -28,7 +42,7 @@ DayOrchestrator.app/   bundle wrapper: TCC identity for EventKit + geocoding
 tests/            unit (fakes) + integration (gate proofs, RUN_MAC EventKit probes)
 ```
 
-## Setup (owner runs these — secrets never go through chat)
+## Setup (manual — the installer does all of this for you; secrets never go through chat)
 
 ```bash
 cd day-orchestrator
