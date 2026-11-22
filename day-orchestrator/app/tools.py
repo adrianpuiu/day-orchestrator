@@ -365,6 +365,8 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
                 invitees=final.get("invitees") or None,
                 alarm_minutes=int(final.get("alarm_minutes") or 0),
                 location=final.get("location") or "",
+                lat=final.get("location_lat"),
+                lon=final.get("location_lon"),
             )
             actionlog.log(
                 deps.db, "gate", "calendar_event_created", "send", approval_id=row.id,
@@ -378,6 +380,19 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             "alarm_minutes": max(0, int(alarm_minutes)),
             "location": location,
         }
+        # Best-effort geocode: canonical address + coordinates for the event
+        # (travel-time aware on iPhone). Read-only, so it needs no approval;
+        # on failure the owner-typed location is kept as-is.
+        if location and hasattr(deps.calendar, "geocode"):
+            try:
+                hits = deps.calendar.geocode(location)
+                if hits:
+                    payload["location"] = hits[0]["address"]
+                    payload["location_lat"] = hits[0]["lat"]
+                    payload["location_lon"] = hits[0]["lon"]
+            except Exception:
+                log.warning("location geocode failed; keeping raw text",
+                            exc_info=True)
         summary = title + (f" — {notes[:80]}" if notes else "")
         return await _gated(
             tool_context, "create_calendar_event", payload,

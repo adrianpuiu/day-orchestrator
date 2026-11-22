@@ -117,14 +117,20 @@ class FakeCalendar:
 
     def create_event(self, title: str, start: str, end: str,
                      notes: str = "", invitees: list[str] | None = None,
-                     alarm_minutes: int = 0, location: str = "") -> str:
+                     alarm_minutes: int = 0, location: str = "",
+                     lat: float | None = None,
+                     lon: float | None = None) -> str:
         event_id = f"ek-{len(self.events) + 1}"
         self.events.append({"id": event_id, "title": title, "start": start,
                             "end": end, "notes": notes,
                             "invitees": invitees or [],
                             "alarm_minutes": alarm_minutes,
-                            "location": location})
+                            "location": location, "lat": lat, "lon": lon})
         return event_id
+
+    def geocode(self, query: str, lat=None, lon=None) -> list[dict]:
+        return [{"name": query, "address": query, "lat": lat or 46.57,
+                 "lon": lon or 26.90}]
 
     def get_event_meta(self, event_id: str) -> dict | None:
         return next((e for e in self.events if e["id"] == event_id), None)

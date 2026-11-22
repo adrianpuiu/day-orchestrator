@@ -48,6 +48,11 @@ def main() -> None:
         help="fire an alert N minutes before the event (0 = no alarm)",
     )
     p_create.add_argument("--location", default="")
+    p_create.add_argument(
+        "--lat", type=float, default=None,
+        help="with --lon: attach structured location (travel-time aware)",
+    )
+    p_create.add_argument("--lon", type=float, default=None)
     sub.add_parser("status")
     p_geo = sub.add_parser("geocode")
     p_geo.add_argument("--query", required=True)
@@ -271,6 +276,18 @@ def main() -> None:
     event.setCalendar_(calendar)
     if args.location:
         event.setLocation_(args.location)
+    if args.lat is not None and args.lon is not None:
+        import CoreLocation
+
+        structured = EK.EKStructuredLocation.locationWithTitle_(
+            args.location or args.title
+        )
+        structured.setGeoLocation_(
+            CoreLocation.CLLocation.alloc().initWithLatitude_longitude_(
+                args.lat, args.lon
+            )
+        )
+        event.setStructuredLocation_(structured)
     if args.alarm_minutes > 0:
         event.addAlarm_(
             EK.EKAlarm.alarmWithRelativeOffset_(-args.alarm_minutes * 60.0)
