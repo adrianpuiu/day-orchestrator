@@ -109,6 +109,7 @@ class FakeCalendar:
     def __init__(self) -> None:
         self.events: list[dict] = []
         self.fetched: list[int] = []
+        self.update_calls: list[str] = []
 
     def get_events(self, days: int) -> list[dict]:
         self.fetched.append(days)
@@ -128,6 +129,7 @@ class FakeCalendar:
         return next((e for e in self.events if e["id"] == event_id), None)
 
     def update_event(self, event_id: str, title=None, start=None, end=None) -> dict:
+        self.update_calls.append(event_id)
         ev = self.get_event_meta(event_id)
         if ev is None:
             raise RuntimeError(f"event {event_id} not found")

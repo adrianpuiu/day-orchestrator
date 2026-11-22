@@ -242,3 +242,34 @@ async def test_coordinator_multi_turn(runtime: Runtime) -> None:
     )
     await say("mark the milk task as done", 3)
     assert tasks.list_open(rt.db) == [], "turn 3: task not completed"
+
+
+async def test_coordinator_asks_before_underspecified_move(runtime: Runtime) -> None:
+    """'move the dentist' without a target must produce a chat QUESTION,
+    not an approval card with a guessed target."""
+    rt = runtime
+    memory.set_value(rt.db, "paired_chat", 42)
+    replies: list[str] = []
+    orig_sm = rt.telegram.send_message
+
+    async def tee_sm(text: str, category: str, reply_markup=None) -> dict:
+        result = await orig_sm(text, category, reply_markup)
+        replies.append(text)
+        return result
+
+    rt.telegram.send_message = tee_sm
+
+    await rt.bus.publish(
+        Event(TELEGRAM_COMMAND, {"text": "move the dentist appointment",
+                                 "chat_id": 42, "message_id": 4})
+    )
+
+    assert approval.list_pending(rt.db) == [], (
+        "underspecified move must not create an approval card"
+    )
+    assert rt.deps.calendar_writer.update_calls == [], (
+        "nothing may be moved without a stated target"
+    )
+    assert replies and "?" in replies[-1], (
+        f"coordinator must ask for the target day/time; got: {replies[-1:]!r}"
+    )

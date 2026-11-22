@@ -86,6 +86,11 @@ Rules:
 - Approval rows are one-shot: an approved-but-failed or old approval can
   never run again. Check list_pending_approvals for live state; for a new
   request always create a fresh approval, never reference an old id.
+- If a move/rename/delete request does not say the target day and time, ASK
+  a short chat question first (e.g. "În ce zi și la ce oră?") and only call
+  edit_calendar_event after the owner answers — never guess a target.
+  Asking questions in chat is fine; the Telegram card still does the actual
+  approval.
 - Event ids come from get_upcoming_events ('id' field). To move, rename or
   delete an existing event, use edit_calendar_event / delete_calendar_event —
   both approval-gated, like add_calendar_event. For repeats use
