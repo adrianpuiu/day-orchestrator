@@ -330,6 +330,15 @@ def _acquire_instance_lock(lock_path: Path):
         return fh
 
 
+async def run_research_all(cfg) -> dict:
+    """Daily research: SPY incumbents' loop + the full HL basket with
+    dual-window grading. Daily cadence trades more tests for faster
+    iteration; the gate's fold rules + non-domination + decay absorb the
+    extra multiple-testing exposure."""
+    await run_research(cfg)
+    return await run_hl_research(cfg, iterations=2)
+
+
 async def run_serve(cfg) -> None:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -344,8 +353,8 @@ async def run_serve(cfg) -> None:
                       "cron", hour=23, minute=30, timezone="UTC",
                       misfire_grace_time=3600, max_instances=1, id="decay_run")
     scheduler.add_job(lambda: asyncio.ensure_future(
-                          _job(cfg, "research", run_research)),
-                      "cron", day_of_week="sat", hour=12, timezone="UTC",
+                          _job(cfg, "research", run_research_all)),
+                      "cron", hour=12, timezone="UTC",     # daily
                       misfire_grace_time=3600, max_instances=1,
                       id="research_run")
     scheduler.add_job(lambda: asyncio.ensure_future(
@@ -360,7 +369,7 @@ async def run_serve(cfg) -> None:
                       id="shadow_run")
     scheduler.start()
     log.info("scheduler running: eod(mon-fri 22:15Z), decay(23:30Z), "
-             "research(sat 12:00Z), report(23:35Z), "
+             "research(daily 12:00Z, SPY+basket), report(23:35Z), "
              "hl-shadow(daily 00:05Z)")
     await asyncio.Event().wait()
 

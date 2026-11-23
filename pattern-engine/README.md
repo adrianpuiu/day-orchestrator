@@ -70,7 +70,7 @@ re-derived at boot; registry/journal DBs are the truth), jobs:
 |-----|----------------|-------|
 | `eod_run` | Mon–Fri 22:15 | ingest + quality gate + process newest bar |
 | `decay_run` | daily 23:30 | trailing-5y re-grade of live specs; 2 consecutive negative windows → retire |
-| `research_run` | Sat 12:00 | one ds41 regeneration round |
+| `research_run` | daily 12:00 | SPY loop + full HL basket, dual-window gate |
 | `report_run` | daily 23:35 | markdown report → `var/reports/YYYY-MM-DD.md` |
 
 Install as a launchd agent (paper only):
