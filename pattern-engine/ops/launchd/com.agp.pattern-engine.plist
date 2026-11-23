@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- pattern-engine autonomous daemon (paper only).
+
+Install:
+  mkdir -p ~/Library/"Application Support"/pattern-engine/logs
+  cp ops/launchd/com.agp.pattern-engine.plist ~/Library/LaunchAgents/
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agp.pattern-engine.plist
+
+Stop / uninstall:
+  launchctl bootout gui/$(id -u)/com.agp.pattern-engine
+  rm ~/Library/LaunchAgents/com.agp.pattern-engine.plist
+
+Logs: ~/Library/Application Support/pattern-engine/logs/agent.log
+State: <project>/var/ (registry.db, journal.db, sessions.db, reports/)
+-->
+<dict>
+    <key>Label</key>
+    <string>com.agp.pattern-engine</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/agp/.local/bin/uv</string>
+        <string>run</string>
+        <string>--directory</string>
+        <string>/Users/agp/Desktop/google-adk/pattern-engine</string>
+        <string>python</string>
+        <string>-m</string>
+        <string>app.runtime</string>
+        <string>serve</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/agp/Library/Application Support/pattern-engine/logs/agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/agp/Library/Application Support/pattern-engine/logs/agent.log</string>
+</dict>
+</plist>

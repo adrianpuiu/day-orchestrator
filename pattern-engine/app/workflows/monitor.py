@@ -33,6 +33,7 @@ class PatternMonitor(BaseAgent):
     gateway: PaperGateway
     risk: RiskManager
     df: pd.DataFrame
+    journal_store: object = None      # core.journal.JournalStore or None
     cursor: int = 0            # index of the next bar to process
     journal: list = field(default_factory=list)
     last_quality: QualityReport | None = None
@@ -40,9 +41,11 @@ class PatternMonitor(BaseAgent):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(self, name: str, registry: Registry, gateway: PaperGateway,
-                 risk: RiskManager, df: pd.DataFrame) -> None:
+                 risk: RiskManager, df: pd.DataFrame,
+                 journal_store=None) -> None:
         super().__init__(name=name, registry=registry, gateway=gateway,
-                         risk=risk, df=with_indicators(df))
+                         risk=risk, df=with_indicators(df),
+                         journal_store=journal_store)
         self.journal = []
 
     # ---- bar processing (shared by live + replay) ------------------------
@@ -57,6 +60,8 @@ class PatternMonitor(BaseAgent):
         if len(self.gateway.closed) > len(self.journal):
             newly_closed = self.gateway.closed[len(self.journal):]
             self.journal = list(self.gateway.closed)
+            if self.journal_store is not None:
+                self.journal_store.append(newly_closed)
         # Engine semantics: i = j + 1 after an exit — no new signal on the
         # bar that closed a position (conservative, matches verified edge).
         if self.gateway.flat and not newly_closed and self.risk.allows_entry(

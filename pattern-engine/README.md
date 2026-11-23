@@ -59,6 +59,36 @@ uv run lint-imports                   # layers: workflows > exec > strategies > 
   ds41's variant passed the absolute gate (n=51, PF 1.27, avgR 0.194) and
   was held back as dominated by v1 (0.268).
 
+
+## Phase 4: autonomy — the daemon
+
+`serve` is the autonomous app: flock single-instance lock (a second daemon
+parks, never double-trades), APScheduler with **no jobstore** (schedule
+re-derived at boot; registry/journal DBs are the truth), jobs:
+
+| job | schedule (UTC) | does |
+|-----|----------------|-------|
+| `eod_run` | Mon–Fri 22:15 | ingest + quality gate + process newest bar |
+| `decay_run` | daily 23:30 | trailing-5y re-grade of live specs; 2 consecutive negative windows → retire |
+| `research_run` | Sat 12:00 | one ds41 regeneration round |
+| `report_run` | daily 23:35 | markdown report → `var/reports/YYYY-MM-DD.md` |
+
+Install as a launchd agent (paper only):
+
+```bash
+mkdir -p ~/Library/"Application Support"/pattern-engine/logs
+cp ops/launchd/com.agp.pattern-engine.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agp.pattern-engine.plist
+# logs: ~/Library/Application Support/pattern-engine/logs/agent.log
+```
+
+The journal persists across restarts (idempotent append on
+strategy_id+entry_ts), so the book survives daemon restarts and upgrades.
+Verified end-to-end via `cycle`: EOD bar processed → decay (both incumbents
+healthy: avgR +1.17/+0.97 trailing 5y) → live ds41 round (proposal n=53,
+PF 1.24 — rejected 0.01 under the gate) → report written.
+
+
 ## Layout
 
 ```

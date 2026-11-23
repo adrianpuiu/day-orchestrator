@@ -16,6 +16,7 @@ The LLM never grades, never sizes, never trades.
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import AsyncGenerator
 
 import pandas as pd
@@ -45,13 +46,18 @@ ALLOWED_KEYS = set(PARAM_BOUNDS) | {"trail_mult"}
 def _clamp(params: dict) -> dict:
     out: dict = {}
     for key, value in params.items():
-        if key not in ALLOWED_KEYS:
-            continue
+        if key not in ALLOWED_KEYS or value is None:
+            continue              # nulls (LLMs emit them) fall back to defaults
         if key == "trail_mult":
-            out[key] = min(max(float(value), 2.0), 3.5) if value is not None else None
+            out[key] = min(max(float(value), 2.0), 3.5)
             continue
         lo, hi = PARAM_BOUNDS[key]
-        v = float(value)
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            continue              # non-numeric: drop, defaults apply
+        if math.isnan(v) or math.isinf(v):
+            continue              # NaN/inf: drop
         out[key] = type(lo)(min(max(v, lo), hi))
     if "target_mult" not in out and "trail_mult" not in out:
         out["target_mult"] = 3.0
