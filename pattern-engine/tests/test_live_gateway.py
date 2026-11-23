@@ -129,3 +129,18 @@ def test_live_matches_paper_when_sends_succeed(guards):
     assert len(lg.closed) == len(pg.closed)
     for lc, pc in zip(lg.closed, pg.closed):
         assert lc["r"] == pc["r"] and lc["entry"] == pc["entry"]
+
+
+def test_key_matches_wallet_catches_wrong_key(monkeypatch):
+    from eth_account import Account
+
+    from app.exec.live_gateway import _key_matches_wallet
+
+    key = Account.create()
+    monkeypatch.setenv("HL_API_SECRET", key.key.hex())
+    monkeypatch.setenv("HL_API_WALLET", "0x" + "11" * 20)
+    assert _key_matches_wallet() is False          # wrong key -> False
+    monkeypatch.setenv("HL_API_WALLET", key.address)
+    assert _key_matches_wallet() is True
+    monkeypatch.delenv("HL_API_SECRET")
+    assert _key_matches_wallet() is None           # check not applicable

@@ -47,6 +47,19 @@ def _default_coin(strategy_id: str) -> str:
     return strategy_id.split(":", 1)[0].split("@", 1)[0]
 
 
+def _key_matches_wallet() -> bool | None:
+    """True/False when both secret and expected wallet address are set —
+    catches the classic 'pasted the wrong key' before it costs anything.
+    None when the check doesn't apply (no secret or no expected address)."""
+    secret = os.environ.get("HL_API_SECRET", "")
+    expect = os.environ.get("HL_API_WALLET", "")
+    if not secret or not expect:
+        return None
+    from eth_account import Account
+
+    return Account.from_key(secret).address.lower() == expect.lower()
+
+
 class LiveGateway(PaperGateway):
     """Same state machine as paper; fills are real (guarded) or blocked."""
 
@@ -134,4 +147,5 @@ class LiveGateway(PaperGateway):
             "testnet": self.testnet,
             "account_address": self.account_address,
             "api_key_present": bool(os.environ.get("HL_API_SECRET")),
+            "api_key_matches_wallet": _key_matches_wallet(),
         }
