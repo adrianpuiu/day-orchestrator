@@ -61,6 +61,9 @@ class ToolDeps:
     card_sender: Any = None
     # Apple backend only: async-safe object with create_event(title, start, end).
     calendar_writer: Any = None
+    # Composition-root injected: async ([Approval]) -> None; closes cards and
+    # resumes paused runs after a chat-side cancellation (ADR-004 amendment).
+    approval_finalizer: Any = None
 
 
 def make_tools(deps: ToolDeps) -> list[FunctionTool]:
@@ -130,6 +133,46 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
                 for a in rows
             ],
         }
+
+    async def cancel_pending_approvals(
+        approval_ids: list[str],
+    ) -> dict[str, Any]:
+        """Cancels pending approval requests by id and revokes their cards.
+
+        Use when the owner asks to drop, cancel, or clean up requests that
+        are still waiting for approval. This only revokes the request — it
+        never performs the requested action and never touches email or the
+        calendar. Already-resolved ids are reported as skipped, not errors.
+
+        Args:
+            approval_ids: Ids from list_pending_approvals.
+        """
+        cancelled: list[str] = []
+        skipped: list[dict[str, str]] = []
+        rows: list[approval.Approval] = []
+        for raw_id in approval_ids:
+            approval_id = str(raw_id)
+            row = approval.get(deps.db, approval_id)
+            if row is None:
+                skipped.append({"id": approval_id, "reason": "unknown"})
+            elif row.state != "pending":
+                skipped.append({"id": approval_id, "reason": row.state})
+            else:
+                rows.append(approval.resolve(
+                    deps.db, approval_id, "cancelled", "chat:owner"
+                ))
+                actionlog.log(deps.db, "gate", "approval_cancelled", "send",
+                              approval_id=approval_id,
+                              detail={"via": "chat:owner"})
+                cancelled.append(approval_id)
+        if rows and deps.approval_finalizer is not None:
+            try:
+                await deps.approval_finalizer(rows)
+            except Exception:
+                log.exception("cancellation finalizer failed; rows stay cancelled")
+        if not cancelled:
+            return {"status": "noop", "cancelled": [], "skipped": skipped}
+        return {"status": "success", "cancelled": cancelled, "skipped": skipped}
 
     # ---- write tools (non-send) ----
 
@@ -458,9 +501,19 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
                     "approval_id": row.id}
 
         meta = await asyncio.to_thread(deps.calendar.get_event_meta, event_id)
+        if meta is None:
+            # Never card a doomed effect: an id that is not on the calendar
+            # can only fail after the owner approves it (2026-11-23 incident).
+            return {
+                "status": "error",
+                "error": (
+                    f"event {event_id!r} is not on the calendar — ids must "
+                    "come fresh from get_upcoming_events"
+                ),
+            }
         payload = {
             "event_id": event_id,
-            "old_title": (meta or {}).get("title", event_id),
+            "old_title": meta.get("title", event_id),
             "new_start": new_start, "new_end": new_end, "new_title": new_title,
         }
         changes = ", ".join(
@@ -496,10 +549,20 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             return {"status": "deleted", "approval_id": row.id}
 
         meta = await asyncio.to_thread(deps.calendar.get_event_meta, event_id)
+        if meta is None:
+            # Same fail-fast as edit: a missing event must never reach the
+            # approval gate.
+            return {
+                "status": "error",
+                "error": (
+                    f"event {event_id!r} is not on the calendar — ids must "
+                    "come fresh from get_upcoming_events"
+                ),
+            }
         payload = {
             "event_id": event_id,
-            "old_title": (meta or {}).get("title", event_id),
-            "old_start": (meta or {}).get("start", ""),
+            "old_title": meta.get("title", event_id),
+            "old_start": meta.get("start", ""),
         }
         return await _gated(
             tool_context, "delete_calendar_event", payload,
@@ -513,6 +576,7 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         FunctionTool(get_upcoming_events),
         FunctionTool(list_tasks),
         FunctionTool(list_pending_approvals),
+        FunctionTool(cancel_pending_approvals),
         FunctionTool(save_draft_reply),
         FunctionTool(add_task),
         FunctionTool(complete_task),

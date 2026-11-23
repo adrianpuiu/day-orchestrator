@@ -70,3 +70,16 @@ mid-effect; on the next resume the effect is re-run instead of returning
 between transport success and audit insert where a hard crash could duplicate
 the effect on recovery. The unreachable `superseded` state and its
 `supersede()` helper were removed in the same cleanup (2026-11-23).
+
+## Amendment (2026-11-23, chat-side cancellation)
+
+`cancel_pending_approvals` (tools layer) resolves pending rows to `cancelled`
+with `via='chat:owner'`, audited as `approval_cancelled`. This is a revocation,
+not an authorization: it can only prevent an effect, never cause one, so the
+free-text ban above does not apply — that rule guards sends, not cancels.
+The runtime then (deferred, after the cancelling chat turn releases the chat
+lock) resumes each paused run as not-confirmed and closes the card's buttons;
+a stale press on a closed card yields an "inactive card" reply, never an
+effect. Delete/edit cards are also fail-fast now: an event id that is not on
+the calendar never reaches the gate (root cause of the 2026-11-23 incident
+where an approved delete failed `not found` after the fact).

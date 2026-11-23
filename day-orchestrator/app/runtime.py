@@ -175,6 +175,9 @@ class Runtime:
         # tasks; commands and approval callbacks for one chat must not
         # interleave (double-tap Approve, burst messages).
         self._chat_locks: dict[int, asyncio.Lock] = {}
+        # Deferred post-cancel cleanup (card close + paused-run resume);
+        # drained on shutdown so no cleanup dies with the process.
+        self._bg_tasks: set[asyncio.Task[None]] = set()
 
         self.deps = ToolDeps(
             db=self.db,
@@ -184,6 +187,7 @@ class Runtime:
             budgets=self.cfg.budgets,
             timezone=self.cfg.timezone,
             card_sender=self._send_approval_card if self.telegram else None,
+            approval_finalizer=self._finalize_cancellations,
             calendar_writer=(
                 self.calendar
                 if self.cfg.calendar_backend == "apple"
@@ -273,6 +277,8 @@ class Runtime:
             log.exception("calendar consent preflight failed")
 
     async def shutdown(self) -> None:
+        if self._bg_tasks:
+            await asyncio.gather(*self._bg_tasks, return_exceptions=True)
         if self._watcher is not None:
             self._watcher.stop()
         if self.telegram is not None:
@@ -705,6 +711,15 @@ class Runtime:
             )
         except approval.ApprovalError as exc:
             log.warning("approval resolve failed: %s", exc)
+            if self.telegram is not None:
+                try:
+                    await self.telegram.send_message(
+                        "That card is no longer active — it was already "
+                        "resolved or cancelled.",
+                        "reminders",
+                    )
+                except Exception:
+                    log.exception("stale-card feedback failed")
             return
         confirmed = mapped == "approved"
         try:
@@ -781,6 +796,55 @@ class Runtime:
             ),
         )
         return True
+
+    # ---------- chat-side cancellation (ADR-004 amendment, 2026-11-23) ----------
+
+    async def _finalize_cancellations(self, rows: list[approval.Approval]) -> None:
+        """Tool hook after cancel_pending_approvals: schedule the cleanup.
+
+        Deferred rather than awaited inside the tool: the cancelled cards
+        pause runs on the very session the cancelling chat turn runs on, so
+        resuming them mid-turn would interleave two runs on one session.
+        The task queues behind the current chat turn via the chat lock.
+        """
+        task = asyncio.create_task(self._close_cancellations(rows))
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
+    async def _close_cancellations(self, rows: list[approval.Approval]) -> None:
+        for row in rows:
+            chat_id: int | None = None
+            if row.session_ref:
+                try:
+                    user_id = str(json.loads(row.session_ref).get("user_id", ""))
+                    if user_id.startswith("tg:"):
+                        chat_id = int(user_id.split(":", 1)[1])
+                except (ValueError, TypeError):
+                    chat_id = None
+            try:
+                if chat_id is None:
+                    await self._close_one_cancellation(row)
+                else:
+                    async with self._lock_for(chat_id):
+                        await self._close_one_cancellation(row)
+            except Exception:
+                log.exception("closing cancelled approval %s failed", row.id)
+
+    async def _close_one_cancellation(self, row: approval.Approval) -> None:
+        """Resume the paused run as not-confirmed, then close the card."""
+        try:
+            await self.resume_for_approval(row, confirmed=False)
+        except Exception:
+            log.exception("cancel resume failed for approval %s", row.id)
+        if self.telegram is not None and row.telegram_message_id:
+            try:
+                await self.telegram.edit_message_text(
+                    row.telegram_message_id,
+                    f"{self._render_card(row)}\n[cancelled — by owner in chat]",
+                    reply_markup=None,
+                )
+            except Exception:
+                log.exception("failed to close cancelled card %s", row.id)
 
     def _root_for_user(self, user_id: str):
         if user_id.startswith("tg:"):

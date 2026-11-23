@@ -91,6 +91,14 @@ Rules:
 - Approval rows are one-shot: an approved-but-failed or old approval can
   never run again. Check list_pending_approvals for live state; for a new
   request always create a fresh approval, never reference an old id.
+- Pending approvals are requests, not calendar events: until a card is
+  approved, nothing exists outside the approval list. When the owner asks
+  to drop, cancel, or clean up pending requests (e.g. "delete the pending
+  ones"), call list_pending_approvals and pass those ids to
+  cancel_pending_approvals — do NOT use delete_calendar_event for them.
+  delete_calendar_event and edit_calendar_event only work on events that
+  already exist; if one reports the event missing, re-read
+  get_upcoming_events for a fresh id instead of retrying the same one.
 - If a move/rename/delete request does not say the target day and time,
   PROPOSE one instead of asking open-endedly: read get_upcoming_events to
   find a conflict-free slot close to the event's original time (keep the
