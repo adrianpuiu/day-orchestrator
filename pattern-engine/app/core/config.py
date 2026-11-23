@@ -33,6 +33,9 @@ class Config:
     # Circuit breakers
     missed_run_limit: int = 2              # process degradation -> halve size
 
+    # Hyperliquid (shadow mode: read-only, address only)
+    hl_account: str = ""
+
     # Paths
     db_dir: str = "var"
 
@@ -55,13 +58,30 @@ class Config:
 
 def load_config(path: Path | None = None) -> Config:
     toml_path = path or (PROJECT_ROOT / "config.toml")
+    _load_dotenv()
     values: dict = {}
     if toml_path.exists():
         with open(toml_path, "rb") as fh:
             values = tomllib.load(fh)
     # .env-canonical credentials override (day-orchestrator convention)
-    for key in ("MODEL_API_BASE", "MODEL_API_KEY"):
+    env_keys = {"MODEL_API_BASE": "model_api_base",
+                "MODEL_API_KEY": "model_api_key",
+                "HL_ACCOUNT_ADDRESS": "hl_account"}
+    for key, field in env_keys.items():
         if os.environ.get(key):
-            values[key.lower()] = os.environ[key]
+            values[field] = os.environ[key]
     known = Config.__dataclass_fields__.keys()
     return Config(**{k: v for k, v in values.items() if k in known})
+
+
+def _load_dotenv() -> None:
+    """Reads PROJECT_ROOT/.env into os.environ (no override)."""
+    env_file = PROJECT_ROOT / ".env"
+    if not env_file.exists():
+        return
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())

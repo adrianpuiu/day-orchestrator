@@ -109,9 +109,15 @@ The market layer is exchange-native:
   markets is a different row, never an overwrite.
 - `hl-ingest` / `hl-research` runtime modes; proposals may set
   `"timeframe": "8h"` to sweep HL-native intraday bars.
+- `hl-shadow [address]` — shadow mode: paper-runs every live HL strategy on
+  fresh bars, mirrors the real account via public read-only endpoints
+  (`clearinghouseState`/`userFills`/`metaAndAssetCtxs` — address only, no
+  key, no signing, no order path), reconciles the two books, and writes
+  `var/shadow_last.json`. Address from `.env` `HL_ACCOUNT_ADDRESS` or CLI.
 
-Live money still requires: `HyperliquidGateway` (read-only shadow first),
-human-confirmation gates, kill switch. Nothing here places real orders.
+Shadow mode is live (Step 2.1). Remaining for real money: an order-capable
+gateway behind confirmation gates + kill switch. Nothing here places real
+orders.
 
 
 ## Layout
@@ -120,7 +126,8 @@ human-confirmation gates, kill switch. Nothing here places real orders.
 app/core      config, models(ds41/LiteLLM), market+quality, indicators,
               backtest engine, excursion labels, registry store
 app/strategies  pullback_resumption (seed), seeds + signal-fn resolution
-app/exec      PaperGateway (paper fills), RiskManager (sizing, breakers)
+app/exec      PaperGateway (paper fills), HyperliquidGateway (read-only
+              account mirror), RiskManager (sizing, breakers)
 app/workflows PatternMonitor (BaseAgent, shared live/replay path)
 app/research VariantProposer (ds41 LlmAgent), SweepAndGrade (code),
               walk-forward gate, fence-tolerant JSON extractor

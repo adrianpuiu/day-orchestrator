@@ -192,6 +192,81 @@ async def run_hl_research(cfg, iterations: int = 2) -> dict:
         log.info("[hl-research] %s: %s", coin, out[coin])
     return out
 
+async def run_hl_shadow(cfg, address: str | None = None) -> dict:
+    """Shadow mode: paper-run every live HL strategy on fresh bars, mirror
+    the real account read-only, reconcile the two books. No orders, ever."""
+    import json
+
+    from .core.hyperliquid import ingest_hl
+    from .core.indicators import with_indicators
+    from .core.registry import Registry
+    from .exec.hyperliquid_gateway import HyperliquidGateway
+    from .exec.paper import PaperGateway
+    from .exec.risk import RiskManager
+    from .workflows.monitor import PatternMonitor
+
+    addr = address or cfg.hl_account
+    if not addr:
+        raise SystemExit("hl-shadow: set HL_ACCOUNT_ADDRESS in .env "
+                         "or pass an address argument")
+    registry = _seed_registry(cfg)
+    gw = HyperliquidGateway(addr)
+
+    paper: dict = {}
+    for spec in [s for s in registry.live_specs() if s.market != "SPY"]:
+        df = with_indicators(ingest_hl(spec.market, Path(cfg.data_dir)))
+        mreg = Registry(Path(cfg.db_dir) /
+                        f"shadow_{spec.market.replace(':', '_')}.db")
+        mreg.upsert(spec)
+        mon = PatternMonitor(
+            name=f"shadow_{spec.market.replace(':', '_')}", registry=mreg,
+            gateway=PaperGateway(cfg.cost_bp_side),
+            risk=RiskManager(unit_equity_usd=cfg.unit_equity_usd,
+                             risk_frac_per_trade=cfg.risk_frac_per_trade),
+            df=df)
+        trades = mon.replay()
+        pos = None if mon.gateway.flat else {
+            "side": mon.gateway.position.signal.side,
+            "entry": round(mon.gateway.position.entry_fill.price, 2),
+            "entry_ts": str(mon.gateway.position.entry_fill.ts),
+        }
+        paper[spec.market] = {
+            "strategy": spec.id, "trades": len(trades),
+            "avg_r": round(sum(t["r"] for t in trades) / len(trades), 3)
+            if trades else None,
+            "open_position": pos,
+            "last_bar": str(df.index[-1])}
+        mreg.close()
+
+    acct = gw.snapshot()
+    acct_pos = {p["coin"]: p["szi"] for p in acct["positions"]}
+    recon = []
+    for mkt, book in paper.items():
+        held = acct_pos.get(mkt, 0.0)
+        want = (book["open_position"] or {}).get("side", 0)
+        if (held > 0) == (want > 0) and held * want > 0:
+            state = "ALIGNED"
+        elif held == 0 and want == 0:
+            state = "ALIGNED (flat)"
+        else:
+            state = f"DIVERGENT (paper {want:+d}, account {held:+g})"
+        recon.append(f"{mkt:>12}: {state}")
+
+    out = {"paper": paper, "account": {
+        "as_of": acct["as_of"],
+        "account_value": acct["margin_summary"].get("accountValue"),
+        "positions": acct["positions"],
+        "recent_fills": acct["recent_fills"]},
+        "reconciliation": recon}
+    dest = Path(cfg.db_dir) / "shadow_last.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(out, indent=2, default=str))
+    for line in recon:
+        log.info("[hl-shadow] %s", line)
+    log.info("[hl-shadow] account %s @ %s, artifact %s",
+             acct["margin_summary"].get("accountValue"), acct["as_of"], dest)
+    return out
+
 
 
 
@@ -262,7 +337,7 @@ MODES = {
     "once": run_once, "replay": run_replay, "research": run_research,
     "decay": run_decay, "report": run_report, "cycle": run_cycle,
     "hl-ingest": run_hl_ingest, "hl-research": run_hl_research,
-    "serve": run_serve,
+    "hl-shadow": run_hl_shadow, "serve": run_serve,
 }
 
 
@@ -282,6 +357,9 @@ async def main(argv: list[str]) -> None:
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
             lock.close()
+        return
+    if mode == "hl-shadow":
+        await run_hl_shadow(cfg, *argv[2:])
         return
     await MODES[mode](cfg)
 
