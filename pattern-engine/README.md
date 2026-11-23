@@ -21,8 +21,9 @@ Two planes (the interview's rule: LLMs are components, never the predictor):
 uv sync
 uv run python -m app.runtime once     # ingest EOD + quality gate + process newest bar (ADK Runner + sqlite+aiosqlite sessions)
 uv run python -m app.runtime replay   # full-history paper replay + stats + excursion report
+uv run python -m app.runtime research # regeneration loop: ds41 proposes, code sweeps + grades
 uv run python -m app.runtime serve    # APScheduler daily EOD loop (no jobstore; re-derived at boot)
-uv run pytest                         # 14 tests: engine lock, parity lock, gate, risk
+uv run pytest                         # 24 tests: engine lock, parity, gate, research loop
 uv run lint-imports                   # layers: workflows > exec > strategies > core
 ```
 
@@ -41,6 +42,23 @@ uv run lint-imports                   # layers: workflows > exec > strategies > 
 - DataQualityGate caught and repaired 22 real 1-ulp OHLC artifacts in the
   fresh yfinance pull; calendar check flags gross holes, not holidays.
 
+## Verified (Phase 3: research loop, live on ds41)
+
+- Round-trip on the LAN model (192.168.0.206:8000, `ds41`): reads registry
+  stats, proposes one bounded JSON variant with rationale — e.g.
+  "Tightening ADX and pullback depth slightly while raising the fixed
+  target…" — code sweeps 33y and grades. The LLM never grades.
+- Gate (fixed ex-ante): PF ≥ 1.25, avgR ≥ 0.10, maxDD ≤ 15R, n ≥ 30,
+  ≥3 positive folds, best fold ≤ 80% of gross positive R. Recalibrated from
+  the first median-fold rule after measuring the incumbent itself
+  (fold avgR [0.11, 0.16, 0.09, −0.05, 1.04] — epoch-lumpy by nature); the
+  policy targets one-epoch wonders, not uniform epochs.
+- Promotion additionally requires non-domination: a gated variant with lower
+  avg_r than a live sibling stays `candidate` (a worse variant must not
+  steal trades — the monitor is first-signal-wins). Demonstrated live:
+  ds41's variant passed the absolute gate (n=51, PF 1.27, avgR 0.194) and
+  was held back as dominated by v1 (0.268).
+
 ## Layout
 
 ```
@@ -49,7 +67,8 @@ app/core      config, models(ds41/LiteLLM), market+quality, indicators,
 app/strategies  pullback_resumption (seed), seeds + signal-fn resolution
 app/exec      PaperGateway (paper fills), RiskManager (sizing, breakers)
 app/workflows PatternMonitor (BaseAgent, shared live/replay path)
-app/runtime   once / replay / serve; ADK Runner + DatabaseSessionService
+app/research VariantProposer (ds41 LlmAgent), SweepAndGrade (code),
+              walk-forward gate, fence-tolerant JSON extractor
 ```
 
 Live money: `RithmicGateway` is Phase 5 — requires credentials and

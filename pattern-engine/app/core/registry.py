@@ -27,7 +27,7 @@ UPSERT = (
     "INSERT INTO strategies (id, market, timeframe, signal_fn, params,"
     " status, stats) VALUES (?,?,?,?,?,?,?)"
     " ON CONFLICT(id) DO UPDATE SET status=excluded.status,"
-    " params=excluded.params"
+    " params=excluded.params, stats=excluded.stats"
 )
 
 
@@ -61,11 +61,14 @@ class Registry:
              json.dumps(spec.params), spec.status, json.dumps(spec.stats)))
         self.conn.commit()
 
-    def live_specs(self) -> list[StrategySpec]:
+    def all_rows(self) -> list[StrategySpec]:
         rows = self.conn.execute(
             "SELECT id, market, timeframe, signal_fn, params, status, stats"
-            " FROM strategies WHERE status='live'").fetchall()
+            " FROM strategies").fetchall()
         return [_row_to_spec(r) for r in rows]
+
+    def live_specs(self) -> list[StrategySpec]:
+        return [s for s in self.all_rows() if s.status == "live"]
 
     def update_stats(self, spec_id: str, stats: dict) -> None:
         self.conn.execute("UPDATE strategies SET stats=? WHERE id=?",

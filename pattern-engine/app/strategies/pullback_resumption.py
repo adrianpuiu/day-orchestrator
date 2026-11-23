@@ -14,15 +14,22 @@ from ..core.types import Signal
 
 def signal(df: pd.DataFrame, i: int, strategy_id: str = "pullback_resumption_long",
            target_mult: float | None = 3.0, trail_mult: float | None = None,
-           time_stop_bars: int = 10) -> Signal | None:
-    """Evaluates the completed bar at integer index i (no lookahead)."""
-    if i < 15:
+           time_stop_bars: int = 10, adx_min: float = 30.0,
+           pullback_mult: float = 0.25, window: int = 5,
+           ema_slope_bars: int = 10) -> Signal | None:
+    """Evaluates the completed bar at integer index i (no lookahead).
+
+    Parameter space for the research loop (defaults = the verified variant):
+    adx_min in [25, 45], pullback_mult in [0.1, 0.5], window in [3, 7].
+    """
+    if i < max(15, window):
         return None
     row = df.iloc[i]
     O, H, L, C = (df[k].values for k in ("Open", "High", "Low", "Close"))
-    pulled_back = min(L[max(i - 4, 0):i + 1]) <= row.ema + 0.25 * row.atr
-    long_sig = (row.adx > 30
-                and df.ema.iat[i] > df.ema.iat[i - 10]
+    pulled_back = (min(L[max(i - (window - 1), 0):i + 1])
+                   <= row.ema + pullback_mult * row.atr)
+    long_sig = (row.adx > adx_min
+                and df.ema.iat[i] > df.ema.iat[max(i - ema_slope_bars, 0)]
                 and pulled_back
                 and C[i] > max(H[i - 1], O[i])
                 and C[i] > row.ema)
@@ -37,7 +44,7 @@ def signal(df: pd.DataFrame, i: int, strategy_id: str = "pullback_resumption_lon
         strategy_id=strategy_id, ts=df.index[i], side=1,
         entry=entry, stop=float(stop), target=float(target) if target else None,
         trail_mult=trail_mult, time_stop_bars=time_stop_bars, stop_dist=float(row.atr),
-        reason=(f"adx={row.adx:.1f}>30 ema rising, pullback touched "
-                f"ema+{0.25 * row.atr:.2f}, resumption close {entry:.2f} "
+        reason=(f"adx={row.adx:.1f}>{adx_min} ema rising, pullback touched "
+                f"ema+{pullback_mult * row.atr:.2f}, resumption close {entry:.2f} "
                 f"> prev high {H[i - 1]:.2f}"),
     )

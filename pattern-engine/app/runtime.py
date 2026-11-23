@@ -3,8 +3,9 @@
 Usage:
   python -m app.runtime once    # ingest + quality gate + process newest bar
   python -m app.runtime replay  # full-history paper replay + stats
+  python -m app.runtime research  # research-loop round: ds41 proposes, code
+                                  # sweeps + grades, registry updated
   python -m app.runtime serve   # APScheduler loop (no jobstore: schedule is
-                                # re-derived at boot, DB rows are the truth)
 """
 
 from __future__ import annotations
@@ -57,6 +58,36 @@ async def run_replay(cfg) -> dict:
         print(sid, stats)
     return report
 
+async def run_research(cfg, iterations: int = 3) -> dict:
+    from .core.indicators import with_indicators
+    from .core.market import load_eod
+    from .core.registry import Registry
+    from .research.agents import build_research_loop
+    from .strategies.seeds import seed_specs
+
+    df = with_indicators(load_eod(cfg.data_path))
+    registry = Registry(cfg.registry_db)
+    for spec in seed_specs():
+        registry.upsert(spec)
+    loop = build_research_loop(cfg, registry, df, max_iterations=iterations)
+    runner = make_runner(cfg, loop)
+    session = await runner.session_service.create_session(
+        app_name="pattern-engine", user_id="local",
+        state={"registry_state": registry.as_dicts()})
+    events = []
+    async for event in runner.run_async(
+            user_id="local", session_id=session.id,
+            new_message=gtypes.Content(role="user",
+                                       parts=[gtypes.Part(text="run research")])):
+        events.append(event)
+    fresh = await runner.session_service.get_session(
+        app_name="pattern-engine", user_id="local", session_id=session.id)
+    print("grade:", fresh.state.get("grade"))
+    print("registry:")
+    for row in registry.as_dicts():
+        print(" ", row["id"], row["status"], row["stats"])
+    return {"grade": fresh.state.get("grade"), "registry": registry.as_dicts()}
+
 
 async def run_serve(cfg) -> None:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -82,6 +113,8 @@ async def main(argv: list[str]) -> None:
         print(await run_once(cfg))
     elif mode == "replay":
         await run_replay(cfg)
+    elif mode == "research":
+        await run_research(cfg)
     elif mode == "serve":
         await run_serve(cfg)
     else:
