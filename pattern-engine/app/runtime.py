@@ -343,28 +343,27 @@ async def run_serve(cfg) -> None:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
     scheduler = AsyncIOScheduler()
+    # Coroutine jobs are awaited ON the loop by AsyncIOScheduler; wrapping
+    # them in sync lambdas (ensure_future from APScheduler's worker thread)
+    # crashed with 'no current event loop' — caught live by the notify tap.
     # misfire_grace_time must be int seconds (timedelta raises TypeError).
-    scheduler.add_job(lambda: asyncio.ensure_future(_job(cfg, "eod", run_once)),
-                      "cron", day_of_week="mon-fri", hour=22, minute=15,
+    scheduler.add_job(_job, "cron", args=[cfg, "eod", run_once],
+                      day_of_week="mon-fri", hour=22, minute=15,
                       timezone="UTC", misfire_grace_time=3600,
                       max_instances=1, id="eod_run")
-    scheduler.add_job(lambda: asyncio.ensure_future(
-                          _job(cfg, "decay", run_decay)),
-                      "cron", hour=23, minute=30, timezone="UTC",
+    scheduler.add_job(_job, "cron", args=[cfg, "decay", run_decay],
+                      hour=23, minute=30, timezone="UTC",
                       misfire_grace_time=3600, max_instances=1, id="decay_run")
-    scheduler.add_job(lambda: asyncio.ensure_future(
-                          _job(cfg, "research", run_research_all)),
-                      "cron", hour=12, timezone="UTC",     # daily
+    scheduler.add_job(_job, "cron", args=[cfg, "research", run_research_all],
+                      hour=12, timezone="UTC",     # daily
                       misfire_grace_time=3600, max_instances=1,
                       id="research_run")
-    scheduler.add_job(lambda: asyncio.ensure_future(
-                          _job(cfg, "report", run_report)),
-                      "cron", hour=23, minute=35, timezone="UTC",
+    scheduler.add_job(_job, "cron", args=[cfg, "report", run_report],
+                      hour=23, minute=35, timezone="UTC",
                       misfire_grace_time=3600, max_instances=1,
                       id="report_run")
-    scheduler.add_job(lambda: asyncio.ensure_future(
-                          _job(cfg, "hl-shadow", run_hl_shadow)),
-                      "cron", hour=0, minute=5, timezone="UTC",   # 24/7: after the UTC daily mark
+    scheduler.add_job(_job, "cron", args=[cfg, "hl-shadow", run_hl_shadow],
+                      hour=0, minute=5, timezone="UTC",   # 24/7: after the UTC daily mark
                       misfire_grace_time=3600, max_instances=1,
                       id="shadow_run")
     scheduler.start()
