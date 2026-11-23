@@ -1,0 +1,12 @@
+# pattern-engine config — model serving for the research plane (Phase 3).
+# The trading plane makes zero LLM calls.
+
+model_api_base = "http://192.168.0.206:8000/v1"
+model_api_key = "EMPTY"
+research_model = "ds41"
+
+market = "SPY"
+
+unit_equity_usd = 100000.0
+risk_frac_per_trade = 0.01
+cost_bp_side = 0.5
