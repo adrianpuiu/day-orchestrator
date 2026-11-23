@@ -192,6 +192,22 @@ async def run_hl_research(cfg, iterations: int = 2) -> dict:
         log.info("[hl-research] %s: %s", coin, out[coin])
     return out
 
+class _MarketJournal:
+    """Journal adapter qualifying trade ids with the market — spec ids
+    repeat across markets and daily bars share the 00:00 UTC ts, so
+    unqualified (strategy_id, entry_ts) pairs would idempotent-drop each
+    other."""
+
+    def __init__(self, store, market: str) -> None:
+        self.store = store
+        self.market = market
+
+    def append(self, closed: list) -> None:
+        self.store.append(
+            [{**t, "strategy_id": f"{self.market}:{t['strategy_id']}"}
+             for t in closed])
+
+
 async def run_hl_shadow(cfg, address: str | None = None) -> dict:
     """Shadow mode: paper-run every live HL strategy on fresh bars, mirror
     the real account read-only, reconcile the two books. No orders, ever."""
@@ -199,6 +215,7 @@ async def run_hl_shadow(cfg, address: str | None = None) -> dict:
 
     from .core.hyperliquid import ingest_hl
     from .core.indicators import with_indicators
+    from .core.journal import JournalStore
     from .core.registry import Registry
     from .exec.hyperliquid_gateway import HyperliquidGateway
     from .exec.paper import PaperGateway
@@ -211,6 +228,7 @@ async def run_hl_shadow(cfg, address: str | None = None) -> dict:
                          "or pass an address argument")
     registry = _seed_registry(cfg)
     gw = HyperliquidGateway(addr)
+    journal = JournalStore(cfg.journal_db)
 
     paper: dict = {}
     for spec in [s for s in registry.live_specs() if s.market != "SPY"]:
@@ -223,7 +241,7 @@ async def run_hl_shadow(cfg, address: str | None = None) -> dict:
             gateway=PaperGateway(cfg.cost_bp_side),
             risk=RiskManager(unit_equity_usd=cfg.unit_equity_usd,
                              risk_frac_per_trade=cfg.risk_frac_per_trade),
-            df=df)
+            df=df, journal_store=_MarketJournal(journal, spec.market))
         trades = mon.replay()
         pos = None if mon.gateway.flat else {
             "side": mon.gateway.position.signal.side,
@@ -279,6 +297,7 @@ async def run_hl_shadow(cfg, address: str | None = None) -> dict:
         log.info("[hl-shadow] %s", line)
     log.info("[hl-shadow] account %s @ %s, artifact %s",
              acct["margin_summary"].get("accountValue"), acct["as_of"], dest)
+    journal.close()
     return out
 
 
