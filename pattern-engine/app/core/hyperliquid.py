@@ -18,8 +18,8 @@ import pandas as pd
 import requests
 
 HL_API = "https://api.hyperliquid.xyz"
-WISHLIST = ["BTC", "ETH", "SPX", "xyz:XYZ100", "xyz:GOLD", "xyz:SILVER",
-            "xyz:BRENTOIL"]
+WISHLIST = ["BTC", "ETH", "SPX", "xyz:SP500", "xyz:XYZ100", "xyz:GOLD",
+            "xyz:SILVER", "xyz:BRENTOIL"]
 PAGE_MS = 4_000 * 8 * 3_600_000         # ~4000 8h candles per request
 
 
