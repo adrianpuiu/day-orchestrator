@@ -117,9 +117,25 @@ The market layer is exchange-native:
   24/7; the mark is the UTC day close) and appends each reconciliation to
   `var/shadow_history.jsonl`.
 
-Shadow mode is live (Step 2.1). Remaining for real money: an order-capable
-gateway behind confirmation gates + kill switch. Nothing here places real
-orders.
+### Live order path (Step 2.2 — built, awaiting credentials)
+
+`LiveGateway` subclasses the parity-locked `PaperGateway`; only the fill
+boundary changes — every entry/exit routes through `guarded_send`:
+
+1. **Kill switch** — `var/KILL` file wins over everything, survives state
+   corruption, manual re-arm only (`runtime kill` trips + disarms; `arm`
+   refuses while tripped).
+2. **Armed flag** — durable in `var/live_state.json` (`runtime arm`).
+3. **Confirmation gate** — the first N orders (config `confirm_first_n`,
+   default 5) enqueue as inspectable intents instead of sending; `runtime
+   approve <id>` executes exactly what was shown. Corrupt state fails safe
+   (unarmed). Missing `HL_API_SECRET` is a hard stop — no paper fallback.
+
+Orders go via the official SDK, signed with the API-wallet key acting on
+the main account address; testnet selectable via config. `runtime preflight`
+prints the full human checklist; `runtime live-once` is the gated
+counterpart of `hl-shadow` (refuses unless armed and un-killed; a halt
+stops every market). No real order has been sent yet — the key is not set.
 
 
 ## Layout
@@ -129,12 +145,13 @@ app/core      config, models(ds41/LiteLLM), market+quality, indicators,
               backtest engine, excursion labels, registry store
 app/strategies  pullback_resumption (seed), seeds + signal-fn resolution
 app/exec      PaperGateway (paper fills), HyperliquidGateway (read-only
-              account mirror), RiskManager (sizing, breakers)
+              account mirror), LiveGateway (gated orders), guards (kill +
+              confirmation), RiskManager (sizing, breakers)
 app/workflows PatternMonitor (BaseAgent, shared live/replay path)
 app/research VariantProposer (ds41 LlmAgent), SweepAndGrade (code),
               walk-forward gate, fence-tolerant JSON extractor
 ```
 
-Live money: `HyperliquidGateway` is the remaining Phase 5 work — read-only
-shadow first, then confirmation gates + kill switch. Nothing here places
-real orders.
+Live money: the gated order path is built (Step 2.2) but has never sent an
+order — `HL_API_SECRET` is not set. Certification order: testnet first,
+then mainnet tiny size behind the confirmation gate.

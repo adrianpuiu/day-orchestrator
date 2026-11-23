@@ -35,6 +35,8 @@ class Config:
 
     # Hyperliquid (shadow mode: read-only, address only)
     hl_account: str = ""
+    hl_testnet: bool = False
+    confirm_first_n: int = 5             # first N live orders need approval
 
     # Paths
     db_dir: str = "var"

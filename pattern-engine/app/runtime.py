@@ -354,11 +354,116 @@ async def _job(cfg, name: str, fn) -> None:
         log.exception("[%s] failed", name)
 
 
+def _live_guards(cfg):
+    from .exec.guards import ConfirmationGate, KillSwitch
+
+    base = Path(cfg.db_dir)
+    kill = KillSwitch(base / "KILL")
+    gate = ConfirmationGate(base / "live_state.json",
+                            confirm_first_n=cfg.confirm_first_n)
+    return kill, gate
+
+
+def run_preflight(cfg) -> dict:
+    """Human checklist before arming: guards, credentials, account."""
+    from .exec.hyperliquid_gateway import HyperliquidGateway
+    from .exec.live_gateway import LiveGateway
+
+    kill, gate = _live_guards(cfg)
+    gw = LiveGateway(kill, gate, cfg.hl_account, testnet=cfg.hl_testnet)
+    out = gw.preflight()
+    if cfg.hl_account:
+        try:
+            acct = HyperliquidGateway(cfg.hl_account).snapshot()
+            out["account_value"] = acct["account_value"]
+            out["account_positions"] = [p["coin"] for p in acct["positions"]]
+        except (OSError, ValueError, KeyError) as e:  # read must not hide state
+            out["account_read_error"] = str(e)[:120]
+    for k, v in out.items():
+        print(f"{k:>20}: {v}")
+    return out
+
+
+def run_approve(cfg, intent_id=None) -> dict:
+    """Executes a pending intent through the same guarded path."""
+    from .exec.live_gateway import LiveGateway
+
+    kill, gate = _live_guards(cfg)
+    gw = LiveGateway(kill, gate, cfg.hl_account, testnet=cfg.hl_testnet)
+    pending = gate.pending()
+    if not intent_id:
+        print("pending intents:")
+        for iid, intent in pending.items():
+            print(f"  {iid}: {intent['kind']} {intent['coin']} "
+                  f"side={intent['side']} qty={intent['qty']} "
+                  f"@~{intent.get('price_hint')}")
+        return {"pending": list(pending)}
+    intent = gate.take_approved(intent_id)
+    if intent is None:
+        raise SystemExit(f"no pending intent {intent_id!r}")
+    # approval bypasses re-enqueue (the human already said yes) but NOT the
+    # kill switch or the armed check
+    result = gate.guarded_send(kill, intent, gw._send, approved=True)
+    gate.note_confirmed_order()
+    print(f"approved+sent {intent_id}: {result}")
+    return result
+
+
+async def run_live_once(cfg) -> dict:
+    """One live step over every live HL strategy — the gated counterpart of
+    hl-shadow. Refuses to run unless armed and not killed."""
+    from .core.hyperliquid import ingest_hl
+    from .core.indicators import with_indicators
+    from .core.registry import Registry
+    from .exec.guards import TradingHalted
+    from .exec.live_gateway import LiveGateway
+    from .exec.risk import RiskManager
+    from .workflows.monitor import PatternMonitor
+
+    kill, gate = _live_guards(cfg)
+    if kill.tripped or not gate.armed:
+        raise SystemExit(f"live-once: not armed or killed "
+                         f"(tripped={kill.tripped}, armed={gate.armed})")
+    registry = _seed_registry(cfg)
+    out: dict = {}
+    for spec in [s for s in registry.live_specs() if s.market != "SPY"]:
+        df = with_indicators(ingest_hl(spec.market, Path(cfg.data_dir)))
+        mreg = Registry(Path(cfg.db_dir) /
+                        f"live_{spec.market.replace(':', '_')}.db")
+        mreg.upsert(spec)
+        gw = LiveGateway(kill, gate, cfg.hl_account,
+                         cost_bp_side=cfg.cost_bp_side,
+                         testnet=cfg.hl_testnet,
+                         coin_of=lambda sid, m=spec.market: m)
+        mon = PatternMonitor(
+            name=f"live_{spec.market.replace(':', '_')}", registry=mreg,
+            gateway=gw,
+            risk=RiskManager(unit_equity_usd=cfg.unit_equity_usd,
+                             risk_frac_per_trade=cfg.risk_frac_per_trade),
+            df=df)
+        try:
+            trades = mon.replay(end=len(df) - 1)      # all but newest bar
+            out[spec.market] = {
+                "closed": len(trades),
+                "open": None if gw.flat else {
+                    "entry": gw.position.entry_fill.price,
+                    "ts": str(gw.position.entry_fill.ts)},
+                "pending": list(gate.pending())}
+        except TradingHalted as e:
+            out[spec.market] = {"halted": str(e)}
+            log.error("[live-once] %s halted: %s", spec.market, e)
+            break                        # a halt stops every market
+        mreg.close()
+    return out
+
+
 MODES = {
     "once": run_once, "replay": run_replay, "research": run_research,
     "decay": run_decay, "report": run_report, "cycle": run_cycle,
     "hl-ingest": run_hl_ingest, "hl-research": run_hl_research,
     "hl-shadow": run_hl_shadow, "serve": run_serve,
+    "live-once": run_live_once, "preflight": run_preflight,
+    "approve": run_approve,
 }
 
 
@@ -368,6 +473,9 @@ async def main(argv: list[str]) -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s")
     cfg = load_config()
     mode = argv[1] if len(argv) > 1 else "once"
+    if mode in ("arm", "kill"):
+        _run_guard_cli(cfg, mode)
+        return
     if mode not in MODES:
         print(__doc__)
         return
@@ -382,7 +490,28 @@ async def main(argv: list[str]) -> None:
     if mode == "hl-shadow":
         await run_hl_shadow(cfg, *argv[2:])
         return
-    await MODES[mode](cfg)
+    if mode == "approve":
+        run_approve(cfg, *argv[2:])
+        return
+    result = MODES[mode](cfg)
+    if asyncio.iscoroutine(result):
+        await result
+
+
+def _run_guard_cli(cfg, mode: str) -> None:
+    kill, gate = _live_guards(cfg)
+    if mode == "kill":
+        kill.trip(reason="cli")
+        gate.disarm()
+        print("KILL switch tripped; gateway disarmed. "
+              "Manual re-arm required.")
+        return
+    if kill.tripped:
+        raise SystemExit("kill switch tripped — remove var/KILL "
+                         "deliberately before arming")
+    gate.arm()
+    print(f"armed. confirm_first_n={gate.confirm_first_n} — the "
+          f"first {gate.confirm_first_n} live orders need `approve`.")
 
 
 if __name__ == "__main__":
