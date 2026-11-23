@@ -125,6 +125,54 @@ async def run_report(cfg, decay: dict | None = None) -> Path:
     return path
 
 
+async def run_hl_ingest(cfg) -> dict:
+    """Ingests the Hyperliquid wishlist; returns per-market quality."""
+    from .core.hyperliquid import WISHLIST, ingest_hl
+    from .core.market import quality_gate
+
+    out: dict = {}
+    for coin in WISHLIST:
+        df = ingest_hl(coin, Path(cfg.data_dir))
+        q = quality_gate(df)
+        out[coin] = {"days": len(df), "ok": q.ok, "problems": q.problems}
+        log.info("[hl-ingest] %s: %s days ok=%s", coin, len(df), q.ok)
+    return out
+
+
+async def run_hl_research(cfg, iterations: int = 2) -> dict:
+    """Reseeds the research loop on every quality-passing HL market."""
+    from .core.hyperliquid import WISHLIST, load_hl
+    from .core.indicators import with_indicators
+    from .core.market import quality_gate
+    from .research.agents import build_research_loop
+
+    registry = _seed_registry(cfg)
+    out: dict = {}
+    for coin in WISHLIST:
+        df = load_hl(coin, Path(cfg.data_dir))
+        if not quality_gate(df).ok:
+            log.info("[hl-research] %s: data gate failed, skipped", coin)
+            out[coin] = "skipped: data gate"
+            continue
+        loop = build_research_loop(cfg, registry, with_indicators(df),
+                                   iterations, market=coin)
+        runner = make_runner(cfg, loop)
+        session = await runner.session_service.create_session(
+            app_name="pattern-engine", user_id="local",
+            state={"registry_state": [
+                r for r in registry.as_dicts() if r["market"] == coin]})
+        async for _e in runner.run_async(
+                user_id="local", session_id=session.id,
+                new_message=gtypes.Content(role="user",
+                                           parts=[gtypes.Part(text="research")])):
+            pass
+        fresh = await runner.session_service.get_session(
+            app_name="pattern-engine", user_id="local", session_id=session.id)
+        out[coin] = str(fresh.state.get("grade"))[:200]
+        log.info("[hl-research] %s: %s", coin, out[coin])
+    return out
+
+
 async def run_cycle(cfg, with_research: bool = True) -> dict:
     """One synchronous full pass — smoke verification and manual kick."""
     out: dict = {}
@@ -191,6 +239,7 @@ async def _job(cfg, name: str, fn) -> None:
 MODES = {
     "once": run_once, "replay": run_replay, "research": run_research,
     "decay": run_decay, "report": run_report, "cycle": run_cycle,
+    "hl-ingest": run_hl_ingest, "hl-research": run_hl_research,
     "serve": run_serve,
 }
 

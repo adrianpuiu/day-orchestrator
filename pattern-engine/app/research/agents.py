@@ -106,10 +106,11 @@ class SweepAndGrade(BaseAgent):
     _df: pd.DataFrame = PrivateAttr()
 
     def __init__(self, registry: Registry, df: pd.DataFrame,
-                 name: str = "sweep_and_grade") -> None:
+                 name: str = "sweep_and_grade", market: str = "SPY") -> None:
         super().__init__(name=name)
         self._registry = registry
         self._df = df
+        self._market = market
 
     async def _run_async_impl(
         self, ctx: InvocationContext
@@ -137,7 +138,7 @@ class SweepAndGrade(BaseAgent):
                         > verdict.stats.get("avg_r", -9.9) for s in siblings)
         status = "live" if (verdict.promoted and not dominated) else "candidate"
         self._registry.upsert(StrategySpec(
-            id=spec_id, params=params, status=status,
+            id=spec_id, market=self._market, params=params, status=status,
             stats={**verdict.stats,
                    "rationale": str(proposal.get("rationale", ""))[:200]}))
         grade_text = (f"{verdict} | promotion={'live' if status == 'live' else 'no'}"
@@ -157,9 +158,11 @@ def _text(s: str):
 
 
 def build_research_loop(cfg: Config, registry: Registry,
-                        df: pd.DataFrame, max_iterations: int = 3) -> LoopAgent:
+                        df: pd.DataFrame, max_iterations: int = 3,
+                        market: str = "SPY") -> LoopAgent:
     return LoopAgent(
         name="research_loop",
-        sub_agents=[VariantProposer(cfg), SweepAndGrade(registry, df)],
+        sub_agents=[VariantProposer(cfg),
+                    SweepAndGrade(registry, df, market=market)],
         max_iterations=max_iterations,
     )

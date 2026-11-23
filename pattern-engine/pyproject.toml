@@ -15,6 +15,7 @@ dependencies = [
     "pandas>=2.0",
     "numpy>=1.26",
     "pyarrow>=16",
+    "requests>=2.34.2",
 ]
 
 requires-python = ">=3.11,<3.14"

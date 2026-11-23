@@ -3205,6 +3205,7 @@ dependencies = [
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pandas" },
     { name = "pyarrow" },
+    { name = "requests" },
     { name = "yfinance" },
 ]
 
@@ -3225,6 +3226,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "pandas", specifier = ">=2.0" },
     { name = "pyarrow", specifier = ">=16" },
+    { name = "requests", specifier = ">=2.34.2" },
     { name = "yfinance", specifier = ">=0.2.40" },
 ]
 
