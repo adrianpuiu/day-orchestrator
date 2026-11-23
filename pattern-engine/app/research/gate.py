@@ -1,8 +1,11 @@
 """Rule-graded promotion gate — the Evaluator. Code decides; LLM never grades.
 
-Thresholds fixed ex-ante (DESIGN.md): PF >= 1.25, avgR >= 0.10, maxDD <= 15%,
-n >= 30, at least 4 of 5 walk-forward folds non-negative and median fold
-avgR >= 50% of overall (OOS degradation <= 50%).
+Two windows:
+  - research window (long Yahoo proxy history): the full statistical gate
+  - confirmation window (HL-native recent data): directional check on the
+    instrument we'd actually trade
+
+Promotion requires passing BOTH plus non-domination vs live siblings.
 """
 
 from __future__ import annotations
@@ -18,12 +21,14 @@ GATE = {
     "min_trades": 30,
     "folds": 5,
     # Walk-forward policy targets one-epoch wonders, not uniform epochs:
-    # the verified incumbent's fold avgR is [0.11, 0.16, 0.09, -0.05, 1.04]
+    # the verified SPY incumbent's fold avgR is [0.11, 0.16, 0.09, -0.05, 1.04]
     # — epoch-lumpy by nature ("trend followers have miserable years").
     # Require edge in >=3 folds and no single fold > 80% of gross positive R.
     "min_folds_positive": 3,
     "max_fold_share": 0.80,
 }
+
+CONFIRM_MIN_TRADES = 10
 
 
 @dataclass
@@ -91,3 +96,14 @@ def evaluate_walkforward(trades: list[dict]) -> Grade:
     stats = {**base.stats,
              "fold_avg_r": [round(float(a), 3) for a in fold_avgs]}
     return Grade(not failures, stats, failures)
+
+
+def evaluate_confirm(trades: list[dict]) -> tuple[bool, dict]:
+    """Confirmation window (HL-native recent data): the sample is inherently
+    small (~3y daily), so the bar is directional, not statistical — the full
+    gate ran on the long research window; this asks only 'does the edge also
+    hold, weakly, on the instrument we'd actually trade'."""
+    n = len(trades)
+    avg_r = sum(t["r"] for t in trades) / n if n else 0.0
+    ok = n >= CONFIRM_MIN_TRADES and avg_r > 0
+    return ok, {"confirm_n": n, "confirm_avg_r": round(avg_r, 3)}

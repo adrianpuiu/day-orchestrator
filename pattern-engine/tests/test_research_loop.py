@@ -104,7 +104,7 @@ async def test_sweep_and_grade_promotes_when_undominated(tmp_path, df):
                 '"params": {"adx_min": 32, "pullback_mult": 0.2, "window": 5, '
                 '"target_mult": 3.5, "trail_mult": null, "time_stop_bars": 10}}\n```')
     registry = Registry(tmp_path / "registry.db")   # empty: no incumbent
-    sg = SweepAndGrade(registry, df)
+    sg = SweepAndGrade(registry, {"d": {"research": df, "confirm": df}})
     escalations = []
     async for event in _run_agent(sg, {"proposal": proposal}):
         if event.actions and event.actions.escalate:
@@ -115,6 +115,39 @@ async def test_sweep_and_grade_promotes_when_undominated(tmp_path, df):
     assert row and row[0] == "live"
 
 
+async def test_dual_window_confirm_gate_blocks_promotion(tmp_path, df):
+    """Research window passes, but a choppy confirmation window (no edge on
+    the actual instrument) must keep the variant a candidate."""
+    import numpy as np
+    import pandas as pd
+
+    from app.core.indicators import with_indicators
+
+    proposal = ('{"id": "pb_conf_fail", "rationale": "same params", '
+                '"params": {"adx_min": 32, "pullback_mult": 0.2, "window": 5, '
+                '"target_mult": 3.5, "trail_mult": null, "time_stop_bars": 10}}')
+    rng = np.random.default_rng(7)
+    n = 2500
+    close = 100.0 * np.exp(np.cumsum(rng.normal(0, 0.01, n)))   # chop, no trend
+    conf = pd.DataFrame({
+        "Open": close, "High": close * 1.004, "Low": close * 0.996,
+        "Close": close, "Volume": 1000.0,
+    }, index=pd.bdate_range("2016-01-04", periods=n))
+    registry = Registry(tmp_path / "registry.db")               # no incumbent
+    sg = SweepAndGrade(registry, {"d": {"research": df,
+                                        "confirm": with_indicators(conf)}})
+    escalated = False
+    async for event in _run_agent(sg, {"proposal": proposal}):
+        if event.actions and event.actions.escalate:
+            escalated = True
+    assert not escalated, "failed confirmation must not escalate/promote"
+    row = registry.conn.execute(
+        "SELECT status, stats FROM strategies WHERE id='pb_conf_fail'"
+    ).fetchone()
+    assert row and row[0] == "candidate"
+    assert "confirm_n" in row[1]          # both windows recorded
+
+
 async def test_sweep_and_grade_dominated_variant_stays_candidate(tmp_path, df):
     proposal = ('{"id": "pb_long_v3", "rationale": "worse on purpose", '
                 '"params": {"adx_min": 32, "pullback_mult": 0.2, "window": 5, '
@@ -123,7 +156,7 @@ async def test_sweep_and_grade_dominated_variant_stays_candidate(tmp_path, df):
     from app.core.registry import StrategySpec
     registry.upsert(StrategySpec(            # unbeatable incumbent
         id="pb_long_king", status="live", stats={"avg_r": 9.99}))
-    sg = SweepAndGrade(registry, df)
+    sg = SweepAndGrade(registry, {"d": {"research": df, "confirm": df}})
     escalated = False
     async for event in _run_agent(sg, {"proposal": proposal}):
         if event.actions and event.actions.escalate:
@@ -152,7 +185,9 @@ async def test_full_loop_scripted_llm_proposes_and_code_grades(tmp_path, df):
         output_key="proposal",
         disallow_transfer_to_parent=True, disallow_transfer_to_peers=True)
     loop = LoopAgent(name="rl", sub_agents=[proposer,
-                                            SweepAndGrade(registry, df)],
+                                            SweepAndGrade(registry,
+                                                {"d": {"research": df,
+                                                       "confirm": df}})],
                      max_iterations=2)
     svc = InMemorySessionService()
     session = await svc.create_session(
@@ -175,7 +210,7 @@ async def test_full_loop_scripted_llm_proposes_and_code_grades(tmp_path, df):
 
 async def test_sweep_and_grade_unparseable_keeps_loop_alive(tmp_path, df):
     registry = Registry(tmp_path / "registry.db")
-    sg = SweepAndGrade(registry, df)
+    sg = SweepAndGrade(registry, {"d": {"research": df, "confirm": df}})
     events = [e async for e in _run_agent(sg, {"proposal": "no json here"})]
     assert events and not any(e.actions and e.actions.escalate for e in events)
 

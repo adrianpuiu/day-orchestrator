@@ -87,3 +87,20 @@ def ingest_hl(coin: str, dest_dir: Path, days: int = 3 * 365) -> pd.DataFrame:
 def load_hl(coin: str, dest_dir: Path) -> pd.DataFrame:
     safe = coin.replace(":", "_").lower()
     return pd.read_parquet(dest_dir / f"hl_{safe}_daily.parquet")
+
+
+def ingest_hl_8h(coin: str, dest_dir: Path, days: int = 3 * 365) -> pd.DataFrame:
+    """Stores raw 8h bars — the intraday variant timeframe (HL-native)."""
+    safe = coin.replace(":", "_").lower()
+    dest = dest_dir / f"hl_{safe}_8h.parquet"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    df = hl_bars(coin, days)
+    if not df.empty:
+        df.index = df.index.tz_localize(None)
+        df.to_parquet(dest)
+    return df
+
+
+def load_hl_8h(coin: str, dest_dir: Path) -> pd.DataFrame:
+    safe = coin.replace(":", "_").lower()
+    return pd.read_parquet(dest_dir / f"hl_{safe}_8h.parquet")

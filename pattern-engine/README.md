@@ -88,6 +88,31 @@ Verified end-to-end via `cycle`: EOD bar processed → decay (both incumbents
 healthy: avgR +1.17/+0.97 trailing 5y) → live ds41 round (proposal n=53,
 PF 1.24 — rejected 0.01 under the gate) → report written.
 
+## Phase 5: Hyperliquid basket (in progress)
+
+Execution target is Hyperliquid (mainnet read-only first, then gated live).
+The market layer is exchange-native:
+
+- `app/core/hyperliquid.py` — public `info` endpoints; universe (main dex +
+  `xyz` builder dex); 8h-candle pagination (API caps 5000 candles/request;
+  8h reaches ~3 years, 1h only ~208 days) aggregated to UTC days.
+  Wishlist: BTC, ETH, SPX, `xyz:XYZ100`, `xyz:GOLD`, `xyz:SILVER`,
+  `xyz:BRENTOIL` (held out until ≥ 300 days).
+- `app/core/yahoo.py` — long **research** histories via Yahoo proxies
+  (BTC-USD, ETH-USD, ^GSPC, GC=F, SI=F, CL=F-for-Brent; XYZ100 has no
+  proxy and stays HL-only).
+- **Dual-window gate** (`app/research/gate.py`): the full walk-forward gate
+  runs on the long research window; promotion additionally requires the
+  HL-native confirmation window (same params, n ≥ 10, avg_r > 0). Research
+  evidence + instrument realism; neither alone promotes.
+- Registry keys on `(market, timeframe, id)` — same variant id across
+  markets is a different row, never an overwrite.
+- `hl-ingest` / `hl-research` runtime modes; proposals may set
+  `"timeframe": "8h"` to sweep HL-native intraday bars.
+
+Live money still requires: `HyperliquidGateway` (read-only shadow first),
+human-confirmation gates, kill switch. Nothing here places real orders.
+
 
 ## Layout
 
@@ -101,6 +126,6 @@ app/research VariantProposer (ds41 LlmAgent), SweepAndGrade (code),
               walk-forward gate, fence-tolerant JSON extractor
 ```
 
-Live money: `RithmicGateway` is Phase 5 — requires credentials and
-human-confirmation gates that do not exist yet. Nothing here places real
-orders.
+Live money: `HyperliquidGateway` is the remaining Phase 5 work — read-only
+shadow first, then confirmation gates + kill switch. Nothing here places
+real orders.

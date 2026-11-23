@@ -19,7 +19,6 @@ import asyncio
 import math
 from collections.abc import AsyncGenerator
 
-import pandas as pd
 from google.adk.agents import Agent, BaseAgent, LoopAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event, EventActions
@@ -72,11 +71,12 @@ new paradigm.
 
 Parameter bounds: adx_min 25-45, pullback_mult 0.10-0.50, window 3-7,
 target_mult 2-5 (or trail_mult 2.0-3.5 instead of target_mult),
-time_stop_bars 5-15.
+time_stop_bars 5-15. Timeframe: "d" (daily) or "8h" (intraday, HL-native —
+only meaningful for crypto-style 24/7 markets).
 
 Output ONLY a JSON object, no markdown fences, no prose:
 {"id": "pullback_resumption_long_v2", "rationale": "one sentence",
- "params": {"adx_min": 32, "pullback_mult": 0.2, "window": 5,
+ "timeframe": "d", "params": {"adx_min": 32, "pullback_mult": 0.2, "window": 5,
             "target_mult": 3.5, "trail_mult": null, "time_stop_bars": 10}}
 
 Live strategies and their stats:
@@ -100,16 +100,20 @@ class VariantProposer(Agent):
 
 
 class SweepAndGrade(BaseAgent):
-    """Pure code: parse proposal, sweep the verified engine, apply the gate."""
+    """Pure code: parse proposal, sweep the verified engine, apply the
+    dual-window gate (long research history + HL-native confirmation)."""
 
     _registry: Registry = PrivateAttr()
-    _df: pd.DataFrame = PrivateAttr()
+    # windows: {"d": {"research": df_long, "confirm": df_hl},
+    #          "8h": {...}} — only present timeframes are sweepable.
+    _windows: dict = PrivateAttr()
+    _market: str = PrivateAttr()
 
-    def __init__(self, registry: Registry, df: pd.DataFrame,
+    def __init__(self, registry: Registry, windows: dict,
                  name: str = "sweep_and_grade", market: str = "SPY") -> None:
         super().__init__(name=name)
         self._registry = registry
-        self._df = df
+        self._windows = windows
         self._market = market
 
     async def _run_async_impl(
@@ -126,22 +130,40 @@ class SweepAndGrade(BaseAgent):
             return
         params = _clamp(proposal.get("params", {}))
         spec_id = str(proposal.get("id", "candidate_v1"))[:80]
+        tf = str(proposal.get("timeframe", "d"))
+        tf_key = "d" if tf in ("d", "1d", "daily") else tf
+        if tf_key not in self._windows:         # unknown -> default daily
+            tf_key = "d"
+        tf_store = "1d" if tf_key == "d" else tf_key   # registry vocabulary
+        win = self._windows[tf_key]
         trades = await asyncio.to_thread(
-            backtest.run, self._df, pullback_resumption.signal, **params)
+            backtest.run, win["research"], pullback_resumption.signal, **params)
         verdict = gate.evaluate_walkforward(trades)
-        # Promotion policy: pass the absolute gate AND not be dominated by a
-        # live sibling with higher avg_r — a worse variant must not steal
-        # trades from the incumbent (monitor trades first-signal-wins).
+        confirm_stats: dict = {}
+        confirm_ok = True
+        if verdict.promoted:
+            confirm_trades = await asyncio.to_thread(
+                backtest.run, win["confirm"], pullback_resumption.signal,
+                **params)
+            confirm_ok, confirm_stats = gate.evaluate_confirm(confirm_trades)
+        # Promotion policy: pass the research gate AND the confirmation window
+        # AND not be dominated by a live sibling (same market+timeframe) with
+        # higher avg_r — a worse variant must not steal trades (first-signal-wins).
         siblings = [s for s in self._registry.live_specs()
-                    if s.signal_fn == "pullback_resumption.signal"]
+                    if s.signal_fn == "pullback_resumption.signal"
+                    and s.market == self._market and s.timeframe == tf_store]
         dominated = any((s.stats.get("avg_r") or -9.9)
                         > verdict.stats.get("avg_r", -9.9) for s in siblings)
-        status = "live" if (verdict.promoted and not dominated) else "candidate"
+        status = ("live" if (verdict.promoted and confirm_ok and not dominated)
+                  else "candidate")
         self._registry.upsert(StrategySpec(
-            id=spec_id, market=self._market, params=params, status=status,
-            stats={**verdict.stats,
+            id=spec_id, market=self._market, timeframe=tf_store,
+            params=params, status=status,
+            stats={**verdict.stats, **confirm_stats,
                    "rationale": str(proposal.get("rationale", ""))[:200]}))
-        grade_text = (f"{verdict} | promotion={'live' if status == 'live' else 'no'}"
+        grade_text = (f"{verdict} | confirm={confirm_stats or 'skipped'} "
+                      f"| timeframe={tf_store} "
+                      f"| promotion={'live' if status == 'live' else 'no'}"
                       f"{' (dominated by incumbent)' if dominated else ''}")
         delta = {"grade": grade_text, "last_spec_id": spec_id}
         if status == "live":
@@ -158,11 +180,11 @@ def _text(s: str):
 
 
 def build_research_loop(cfg: Config, registry: Registry,
-                        df: pd.DataFrame, max_iterations: int = 3,
+                        windows: dict, max_iterations: int = 3,
                         market: str = "SPY") -> LoopAgent:
     return LoopAgent(
         name="research_loop",
         sub_agents=[VariantProposer(cfg),
-                    SweepAndGrade(registry, df, market=market)],
+                    SweepAndGrade(registry, windows, market=market)],
         max_iterations=max_iterations,
     )

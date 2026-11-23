@@ -78,7 +78,9 @@ def evaluate_decay(registry: Registry, df: pd.DataFrame,
             results["windows"][spec.id]["verdict"] = "healthy"
         if streak >= strikes_to_retire:
             registry.conn.execute(
-                "UPDATE strategies SET status='retired' WHERE id=?", (spec.id,))
+                "UPDATE strategies SET status='retired'"
+                " WHERE market=? AND timeframe=? AND id=?",
+                (spec.market, spec.timeframe, spec.id))
             registry.conn.commit()
             results["retired"].append(spec.id)
             results["windows"][spec.id]["verdict"] = (

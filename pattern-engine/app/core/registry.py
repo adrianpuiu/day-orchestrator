@@ -13,23 +13,23 @@ from pathlib import Path
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS strategies (
-    id TEXT PRIMARY KEY,
+    id TEXT NOT NULL,
     market TEXT NOT NULL,
     timeframe TEXT NOT NULL,
     signal_fn TEXT NOT NULL,
     params TEXT NOT NULL,
     status TEXT NOT NULL,
-    stats TEXT NOT NULL
+    stats TEXT NOT NULL,
+    PRIMARY KEY (market, timeframe, id)
 );
 """
 
 UPSERT = (
     "INSERT INTO strategies (id, market, timeframe, signal_fn, params,"
     " status, stats) VALUES (?,?,?,?,?,?,?)"
-    " ON CONFLICT(id) DO UPDATE SET status=excluded.status,"
+    " ON CONFLICT(market, timeframe, id) DO UPDATE SET status=excluded.status,"
     " params=excluded.params, stats=excluded.stats"
 )
-
 
 @dataclass
 class StrategySpec:
@@ -70,9 +70,11 @@ class Registry:
     def live_specs(self) -> list[StrategySpec]:
         return [s for s in self.all_rows() if s.status == "live"]
 
-    def update_stats(self, spec_id: str, stats: dict) -> None:
-        self.conn.execute("UPDATE strategies SET stats=? WHERE id=?",
-                          (json.dumps(stats), spec_id))
+    def update_stats(self, spec: StrategySpec, stats: dict) -> None:
+        self.conn.execute(
+            "UPDATE strategies SET stats=?"
+            " WHERE market=? AND timeframe=? AND id=?",
+            (json.dumps(stats), spec.market, spec.timeframe, spec.id))
         self.conn.commit()
 
     def as_dicts(self) -> list[dict]:

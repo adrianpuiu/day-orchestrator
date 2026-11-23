@@ -23,14 +23,8 @@ def _registry(tmp_path, live_id: str) -> Registry:
     reg = Registry(tmp_path / "registry.db")
     for spec in seed_specs():
         status = "live" if spec.id == live_id else "retired"
-        reg.conn.execute(
-            "INSERT INTO strategies (id, market, timeframe, signal_fn, params,"
-            " status, stats) VALUES (?,?,?,?,?,?,?)"
-            " ON CONFLICT(id) DO UPDATE SET status=excluded.status",
-            (spec.id, spec.market, spec.timeframe, spec.signal_fn,
-             __import__("json").dumps(spec.params), status,
-             __import__("json").dumps(spec.stats)))
-    reg.conn.commit()
+        up = spec.__class__(**{**spec.__dict__, "status": status})
+        reg.upsert(up)
     return reg
 
 

@@ -89,7 +89,10 @@ async def run_research(cfg, iterations: int = 3) -> dict:
 
     df = with_indicators(market.load_eod(cfg.data_path))
     registry = _seed_registry(cfg)
-    loop = build_research_loop(cfg, registry, df, max_iterations=iterations)
+    # SPY incumbents are locked to the fixture; both windows are the same
+    # verified series so daily semantics are unchanged.
+    windows = {"d": {"research": df, "confirm": df}}
+    loop = build_research_loop(cfg, registry, windows, max_iterations=iterations)
     runner = make_runner(cfg, loop)
     session = await runner.session_service.create_session(
         app_name="pattern-engine", user_id="local",
@@ -140,22 +143,39 @@ async def run_hl_ingest(cfg) -> dict:
 
 
 async def run_hl_research(cfg, iterations: int = 2) -> dict:
-    """Reseeds the research loop on every quality-passing HL market."""
-    from .core.hyperliquid import WISHLIST, load_hl
+    """Dual-window reseeding per HL market: long Yahoo-proxy research
+    window + HL-native confirmation window, daily and 8h timeframes."""
+    from .core.hyperliquid import WISHLIST, ingest_hl_8h, load_hl
     from .core.indicators import with_indicators
     from .core.market import quality_gate
+    from .core.yahoo import YAHOO_MAP, load_yahoo
     from .research.agents import build_research_loop
 
     registry = _seed_registry(cfg)
     out: dict = {}
     for coin in WISHLIST:
-        df = load_hl(coin, Path(cfg.data_dir))
-        if not quality_gate(df).ok:
+        daily = load_hl(coin, Path(cfg.data_dir))
+        bars8 = ingest_hl_8h(coin, Path(cfg.data_dir))
+        if not quality_gate(daily).ok and len(bars8) < 300:
             log.info("[hl-research] %s: data gate failed, skipped", coin)
             out[coin] = "skipped: data gate"
             continue
-        loop = build_research_loop(cfg, registry, with_indicators(df),
-                                   iterations, market=coin)
+        windows: dict = {}
+        if coin in YAHOO_MAP:
+            windows["d"] = {"research": with_indicators(load_yahoo(coin,
+                                              Path(cfg.data_dir))),
+                            "confirm": with_indicators(daily)}
+        elif quality_gate(daily).ok:      # XYZ100: HL-only, thin but honest
+            windows["d"] = {"research": with_indicators(daily),
+                            "confirm": with_indicators(daily)}
+        if len(bars8) >= 300:
+            windows["8h"] = {"research": with_indicators(bars8),
+                             "confirm": with_indicators(bars8.tail(1095))}
+        if not windows:
+            out[coin] = "skipped: no window"
+            continue
+        loop = build_research_loop(cfg, registry, windows, iterations,
+                                   market=coin)
         runner = make_runner(cfg, loop)
         session = await runner.session_service.create_session(
             app_name="pattern-engine", user_id="local",
@@ -168,9 +188,11 @@ async def run_hl_research(cfg, iterations: int = 2) -> dict:
             pass
         fresh = await runner.session_service.get_session(
             app_name="pattern-engine", user_id="local", session_id=session.id)
-        out[coin] = str(fresh.state.get("grade"))[:200]
+        out[coin] = str(fresh.state.get("grade"))[:400]
         log.info("[hl-research] %s: %s", coin, out[coin])
     return out
+
+
 
 
 async def run_cycle(cfg, with_research: bool = True) -> dict:

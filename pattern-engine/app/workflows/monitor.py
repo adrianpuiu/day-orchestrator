@@ -106,8 +106,11 @@ class PatternMonitor(BaseAgent):
         by_id: dict[str, list[dict]] = {}
         for t in self.gateway.closed:
             by_id.setdefault(t["strategy_id"], []).append(t)
+        specs = {s.id: s for s in self.registry.all_rows()}
         for sid, trades in by_id.items():
-            self.registry.update_stats(sid, backtest.summarize(trades))
+            if sid in specs:      # registry keys on (market, timeframe, id)
+                self.registry.update_stats(
+                    specs[sid], backtest.summarize(trades))
 
     # ---- ADK BaseAgent ---------------------------------------------------
 
