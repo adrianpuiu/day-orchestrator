@@ -113,7 +113,9 @@ The market layer is exchange-native:
   fresh bars, mirrors the real account via public read-only endpoints
   (`clearinghouseState`/`userFills`/`metaAndAssetCtxs` — address only, no
   key, no signing, no order path), reconciles the two books, and writes
-  `var/shadow_last.json`. Address from `.env` `HL_ACCOUNT_ADDRESS` or CLI.
+  `var/shadow_last.json`. Runs daily at 00:05 UTC from the daemon (HL is
+  24/7; the mark is the UTC day close) and appends each reconciliation to
+  `var/shadow_history.jsonl`.
 
 Shadow mode is live (Step 2.1). Remaining for real money: an order-capable
 gateway behind confirmation gates + kill switch. Nothing here places real

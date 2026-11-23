@@ -261,6 +261,20 @@ async def run_hl_shadow(cfg, address: str | None = None) -> dict:
     dest = Path(cfg.db_dir) / "shadow_last.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(out, indent=2, default=str))
+    # append-only record: the reconciliation history builds itself
+    record = {"as_of": out["account"]["as_of"],
+              "account_value": out["account"]["account_value"],
+              "paper": {m: {"open": bool(b["open_position"]),
+                            "trades": b["trades"]}
+                        for m, b in paper.items()},
+              "reconciliation": recon}
+    hist = Path(cfg.db_dir) / "shadow_history.jsonl"
+
+    def _append_history() -> None:
+        with hist.open("a") as fh:
+            fh.write(json.dumps(record, default=str) + "\n")
+
+    await asyncio.to_thread(_append_history)
     for line in recon:
         log.info("[hl-shadow] %s", line)
     log.info("[hl-shadow] account %s @ %s, artifact %s",
@@ -318,10 +332,17 @@ async def run_serve(cfg) -> None:
     scheduler.add_job(lambda: asyncio.ensure_future(
                           _job(cfg, "report", run_report)),
                       "cron", hour=23, minute=35, timezone="UTC",
-                      misfire_grace_time=3600, max_instances=1, id="report_run")
+                      misfire_grace_time=3600, max_instances=1,
+                      id="report_run")
+    scheduler.add_job(lambda: asyncio.ensure_future(
+                          _job(cfg, "hl-shadow", run_hl_shadow)),
+                      "cron", hour=0, minute=5, timezone="UTC",   # 24/7: after the UTC daily mark
+                      misfire_grace_time=3600, max_instances=1,
+                      id="shadow_run")
     scheduler.start()
     log.info("scheduler running: eod(mon-fri 22:15Z), decay(23:30Z), "
-             "research(sat 12:00Z), report(23:35Z)")
+             "research(sat 12:00Z), report(23:35Z), "
+             "hl-shadow(daily 00:05Z)")
     await asyncio.Event().wait()
 
 
