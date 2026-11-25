@@ -47,6 +47,38 @@ class ScriptedLlm(BaseLlm):
         yield LlmResponse(content=content)
 
 
+class RecordingLlm(ScriptedLlm):
+    """ScriptedLlm that also keeps every request, so tests can read what an
+    agent was actually given."""
+
+    requests: list[Any] = Field(default_factory=list)
+
+    async def _generate_content_async_impl(self, llm_request):
+        self.requests.append(llm_request)
+        async for response in super()._generate_content_async_impl(llm_request):
+            yield response
+
+
+def system_instruction(request) -> str:
+    """The rendered system instruction of a recorded LLM request, as text."""
+    given = request.config.system_instruction if request.config else None
+    if not isinstance(given, str):
+        given = "".join(p.text or "" for p in getattr(given, "parts", None) or [])
+    return given
+
+
+def conversation_text(request) -> str:
+    """The text parts of a recorded LLM request's conversation, as one string."""
+    return "\n".join(
+        part.text or "" for content in request.contents for part in content.parts or []
+    )
+
+
+def live_state_block(request) -> str:
+    """The last part of a recorded LLM request: where the live-state block is pinned."""
+    return request.contents[-1].parts[-1].text or ""
+
+
 class FakeGmail:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
@@ -117,7 +149,9 @@ class FakeCalendar:
 
     def get_events(self, days: int) -> list[dict]:
         self.fetched.append(days)
-        return list(self.events)
+        # The read contract of a calendar adapter (CalendarClient.get_events):
+        # start, end, summary, location — stored events carry `title`.
+        return [{**event, "summary": event.get("title")} for event in self.events]
 
     def create_event(self, title: str, start: str, end: str,
                      notes: str = "", invitees: list[str] | None = None,

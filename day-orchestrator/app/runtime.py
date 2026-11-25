@@ -211,7 +211,7 @@ class Runtime:
         # None → resolve from cfg (local OpenAI-compatible or Gemini per config);
         # tests/smoke may inject an ADK model object (ScriptedLlm) instead.
         self._coordinator_model = coordinator_model
-        coordinator = make_coordinator(self._coordinator_model or self.cfg, tools)
+        coordinator = make_coordinator(self._coordinator_model or self.cfg, tools, self.deps)
         # Stored bare: _run_agent builds a fresh resumable App per invocation,
         # so a never-executed wrapper here would only suggest a second path.
         self.coordinator = coordinator
@@ -583,6 +583,33 @@ class Runtime:
             self._chat_locks[chat_id] = lock
         return lock
 
+    CHAT_MEMORY_IDLE_SECONDS = 8 * 3600
+
+    def _chat_session_id(self, chat_id: int) -> str:
+        """The session of the chat's current conversation.
+
+        A conversation ends after CHAT_MEMORY_IDLE_SECONDS of silence and the
+        next message starts a fresh session. Chat history is context for the
+        exchange at hand only — durable state lives in the calendar, the
+        approvals and the tasks. One endless session is how a "HI" on
+        2026-11-26 got the calendar of 2026-11-22 back: the model recited its
+        own earlier answer.
+        """
+        key = f"chat_session:{chat_id}"
+        now = time.time()
+        current = memory.get_value(self.db, key)
+        if not isinstance(current, dict):
+            current = {}
+        try:
+            live = now - float(current.get("last", 0)) <= self.CHAT_MEMORY_IDLE_SECONDS
+        except (TypeError, ValueError):
+            live = False
+        if not (live and current.get("id")):
+            current = {"id": f"tg-{chat_id}-{uuid.uuid4().hex[:8]}"}
+        current["last"] = now
+        memory.set_value(self.db, key, current)
+        return str(current["id"])
+
     EDIT_TTL_SECONDS = 600
 
     def _load_edit_pending(self, key: str) -> dict | None:
@@ -661,7 +688,7 @@ class Runtime:
                 )
                 return
 
-        session_id = f"tg-{chat_id}"
+        session_id = self._chat_session_id(chat_id)
         typing = self.telegram.start_typing()
         try:
             reply = await self._run_agent(

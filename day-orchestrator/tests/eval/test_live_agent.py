@@ -14,6 +14,7 @@ import dataclasses
 import os
 import re
 import tempfile
+import time
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -253,40 +254,59 @@ async def test_coordinator_delete_goes_through_gate(runtime: Runtime) -> None:
     )
 
 
-async def _tool_calls(rt: Runtime, name: str) -> int:
-    session = await rt.session_service.get_session(
-        app_name="app", user_id="tg:42", session_id="tg-42"
-    )
-    return sum(
-        1 for event in session.events for call in event.get_function_calls()
-        if call.name == name
-    )
-
-
-async def test_coordinator_reads_live_calendar_state(runtime: Runtime) -> None:
-    """2026-11-23: asked why new items were not in the calendar, the
-    coordinator answered from its own earlier messages and called the list
-    "confirmed". Calendar state is live: the turn must read it."""
+async def test_coordinator_answers_from_live_state(
+    runtime: Runtime, monkeypatch
+) -> None:
+    """2026-11-26: three days after the last chat turn, "HI" was answered with
+    the calendar list of 2026-11-22, labelled "confirmed" and "azi". Calendar,
+    pending and task state comes from the snapshot read at the start of every
+    turn — never from the conversation."""
     rt = runtime
     memory.set_value(rt.db, "paired_chat", 42)
-    rt.deps.calendar_writer.events.append({
-        "id": "ek-1", "title": "Vizionare apartament",
-        "start": "2026-11-23T23:00", "end": "2026-11-24T00:00",
-        "notes": "", "invitees": [], "alarm_minutes": 0, "location": "",
-    })
+    events = rt.deps.calendar_writer.events
+    tomorrow = datetime.now().astimezone() + timedelta(days=1)
+    at = lambda h, m: tomorrow.replace(  # noqa: E731
+        hour=h, minute=m, second=0, microsecond=0
+    ).isoformat(timespec="minutes")
+    stale = {"id": "ek-old", "title": "Old planning call", "start": at(10, 0),
+             "end": at(11, 0), "notes": "", "invitees": [], "alarm_minutes": 0,
+             "location": ""}
+    current = {"id": "ek-1", "title": "Vizionare apartament",
+               "start": at(15, 0), "end": at(16, 0), "notes": "", "invitees": [],
+               "alarm_minutes": 0, "location": ""}
+    events.append(stale)
     await rt.bus.publish(
-        Event(TELEGRAM_COMMAND, {"text": "add a task: buy milk",
-                                 "chat_id": 42, "message_id": 1})
+        Event(TELEGRAM_COMMAND, {"text": "ce am în calendar?", "chat_id": 42,
+                                 "message_id": 1})
     )
-    reads = await _tool_calls(rt, "get_upcoming_events")
+    assert "Old planning call" in rt.telegram.messages[-1], (
+        "the first answer must list the event that exists"
+    )
+
+    events.remove(stale)  # removed in Calendar.app since the last turn
+    events.append(current)
+    for message_id, text in enumerate(("HI", "salut, ce mai e pe azi?"), start=2):
+        await rt.bus.publish(
+            Event(TELEGRAM_COMMAND, {"text": text, "chat_id": 42,
+                                     "message_id": message_id})
+        )
+        reply = rt.telegram.messages[-1]
+        assert "Old planning call" not in reply, (
+            f"{text!r}: a removed event came back from conversation memory: {reply!r}"
+        )
+
+    # …and a conversation that went quiet for the night is over: its history
+    # is not context for the next day.
+    events.remove(current)
+    later = time.time() + 9 * 3600
+    monkeypatch.setattr(time, "time", lambda: later)
     await rt.bus.publish(
-        Event(TELEGRAM_COMMAND, {"text": "ce am în calendar?",
-                                 "chat_id": 42, "message_id": 2})
+        Event(TELEGRAM_COMMAND, {"text": "HI", "chat_id": 42, "message_id": 4})
     )
-    assert await _tool_calls(rt, "get_upcoming_events") > reads, (
-        "a calendar question must be answered from a read in the same turn"
+    reply = rt.telegram.messages[-1]
+    assert "Vizionare apartament" not in reply, (
+        f"a cold conversation came back as current state: {reply!r}"
     )
-    assert any("Vizionare apartament" in m for m in rt.telegram.messages)
 
 
 # --- brief readability: same local model judges against a fixed rubric --------

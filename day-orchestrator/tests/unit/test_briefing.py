@@ -17,14 +17,19 @@ from pathlib import Path
 from typing import Any
 
 from google.genai import types as gtypes
-from pydantic import Field
 
 from app.core import actionlog, tasks
 from app.core.config import Config
 from app.core.db import Database
 from app.core.secrets import InMemoryBackend, Secrets
 from app.runtime import Runtime
-from app.smoke import FakeCalendar, FakeGmail, FakeTelegram, ScriptedLlm
+from app.smoke import (
+    FakeCalendar,
+    FakeGmail,
+    FakeTelegram,
+    RecordingLlm,
+    system_instruction,
+)
 from app.workflows import pipelines
 from app.workflows.pipelines import _schedule_lines, briefing_loader
 
@@ -162,25 +167,6 @@ async def test_brief_covers_mail_since_the_previous_brief(tmp_path) -> None:
     await rt.shutdown()
 
 
-class RecordingLlm(ScriptedLlm):
-    """Scripted LLM that keeps every request, so tests can read what each
-    pipeline agent was actually given."""
-
-    requests: list[Any] = Field(default_factory=list)
-
-    async def _generate_content_async_impl(self, llm_request):
-        self.requests.append(llm_request)
-        async for response in super()._generate_content_async_impl(llm_request):
-            yield response
-
-
-def _instruction(request) -> str:
-    given = request.config.system_instruction if request.config else None
-    if not isinstance(given, str):
-        given = "".join(p.text or "" for p in getattr(given, "parts", None) or [])
-    return given
-
-
 def _scripted_agents(monkeypatch, llm: RecordingLlm) -> None:
     """The three LLM steps of the brief on the scripted model; the glue between
     them stays real."""
@@ -239,8 +225,8 @@ async def test_tasks_extracted_by_the_brief_appear_in_it_and_never_twice(
     async def brief(key: str) -> str:
         gmail.msgs = [_mail("17", timedelta(hours=2))]
         await rt.run_briefing(key)
-        (planner,) = [r for r in llm.requests if "morning brief" in _instruction(r)]
-        return _instruction(planner)
+        (planner,) = [r for r in llm.requests if "morning brief" in system_instruction(r)]
+        return system_instruction(planner)
 
     first = await brief("brief:one")
     assert f"- [someday] {title}" in first, (

@@ -45,6 +45,10 @@ Design rules that followed (full reasoning in
   brief, keeps one task per email however often that mail is read again, and
   never revives a task the owner finished. Timed tasks stand in the Schedule
   next to calendar events, marked `(task)`.
+- The coordinator answers about the calendar, pending cards and tasks from a
+  snapshot read at the start of each turn and pinned to the end of the
+  request — never from its own earlier messages. A chat conversation ends after
+  a night of silence; the calendar, the cards and the tasks carry the state.
 
 ## Calendar & Maps (Apple EventKit)
 
