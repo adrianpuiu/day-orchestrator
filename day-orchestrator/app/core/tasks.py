@@ -90,14 +90,26 @@ def add(
     source_ref: str | None = None,
     due: str | None = None,
 ) -> dict[str, Any]:
+    """Inserts a task; `created` says whether this call added it.
+
+    With `source_ref` (the email a task was extracted from) it is idempotent:
+    the task already kept for that email — open, done or dropped — comes back
+    with created=False. Re-reading the same mail never duplicates a task, and
+    one the owner finished or dropped stays that way.
+    """
     task_id = uuid.uuid4().hex[:12]
     now = _now()
-    db.execute(
-        "INSERT INTO tasks (id, title, source, source_ref, due, status, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, 'open', ?, ?)",
+    cur = db.execute(
+        "INSERT OR IGNORE INTO tasks (id, title, source, source_ref, due, status, "
+        "created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)",
         (task_id, title, source, source_ref, due, now, now),
     )
-    return {"id": task_id, "title": title, "due": due, "status": "open"}
+    if cur.rowcount == 1:
+        return {"id": task_id, "title": title, "source": source,
+                "source_ref": source_ref, "due": due, "status": "open",
+                "created": True}
+    existing = db.query("SELECT * FROM tasks WHERE source_ref=?", (source_ref,))
+    return {**dict(existing[0]), "created": False}
 
 
 def complete(db: Database, task_id: str) -> dict[str, Any]:

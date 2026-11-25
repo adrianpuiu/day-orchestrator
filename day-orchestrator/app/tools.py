@@ -202,6 +202,26 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         task = tasks.add(deps.db, title, source="tool", due=due)
         return {"status": "success", "task": task}
 
+    async def add_task_from_email(
+        email_id: str, title: str, due: str | None = None
+    ) -> dict[str, Any]:
+        """Adds a task extracted from one email. Idempotent per email: at most
+        one task exists for an email, and one the owner finished or dropped
+        stays that way — the result then says 'existing' or 'skipped'.
+
+        Args:
+            email_id: The 'uid' of the triaged email item, copied exactly; it
+                is what keeps repeated extraction from duplicating the task.
+            title: Short task description.
+            due: Optional ISO 8601 due datetime, e.g. 2026-11-25T14:00.
+        """
+        task = tasks.add(deps.db, title, source="email", source_ref=email_id, due=due)
+        if task["created"]:
+            status = "success"
+        else:
+            status = "existing" if task["status"] == "open" else "skipped"
+        return {"status": status, "task": task}
+
     async def complete_task(task_id: str) -> dict[str, Any]:
         """Marks a task done by id.
 
@@ -294,17 +314,28 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
             row = approval.create(deps.db, kind, payload,
                                   session_ref=session_ref)
             tool_context.state[state_key] = row.id
+            stale = approval.supersede_event_requests(deps.db, kind, payload, row.id)
+            for old in stale:
+                actionlog.log(deps.db, "gate", "approval_superseded", "send",
+                              approval_id=old.id, detail={"by": row.id})
             if deps.card_sender is not None:
                 try:
                     message_id = await deps.card_sender(row)
                     approval.attach_telegram_message(deps.db, row.id, message_id)
                 except Exception:
                     log.exception("failed to send approval card; gate stays in DB")
+            if stale and deps.approval_finalizer is not None:
+                try:
+                    await deps.approval_finalizer(stale)
+                except Exception:
+                    log.exception("supersede finalizer failed; rows stay superseded")
             tool_context.request_confirmation(hint=hint, payload={"approval_id": row.id})
-            return {
-                "status": "awaiting_approval",
-                "approval_id": row.id,
-            }
+            result: dict[str, Any] = {"status": "awaiting_approval", "approval_id": row.id}
+            if stale:
+                result["superseded"] = [old.id for old in stale]
+                result["note"] = ("earlier pending cards for the same event were "
+                                  "replaced by this one")
+            return result
 
         # Resumed execution: the gate decides, never the chat text.
         if approval_id is None:
@@ -579,6 +610,7 @@ def make_tools(deps: ToolDeps) -> list[FunctionTool]:
         FunctionTool(cancel_pending_approvals),
         FunctionTool(save_draft_reply),
         FunctionTool(add_task),
+        FunctionTool(add_task_from_email),
         FunctionTool(complete_task),
         FunctionTool(notify_user),
         FunctionTool(add_reminder),

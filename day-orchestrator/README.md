@@ -23,8 +23,10 @@ no receipt. Day Orchestrator inverts that: it runs **on your Mac**
 auditable SQLite file**, and **cannot send an email or write a calendar event
 without you tapping Approve** in Telegram. Every transition lands in an
 append-only action log; an at-most-once latch makes double-apply impossible;
-identical duplicate requests collapse onto a single approval card; a failed
-action after approval pushes an explicit ❌ instead of failing silently.
+identical duplicate requests collapse onto a single approval card; a newer
+move or delete of the same event retires its earlier pending card; a failed
+action after approval pushes an explicit ❌ instead of failing silently, and
+every card ends on what actually happened (`✅ created`, `❌ failed`).
 
 Design rules that followed (full reasoning in
 [`../docs/architecture.md`](../docs/architecture.md), decisions in
@@ -39,6 +41,10 @@ Design rules that followed (full reasoning in
   same identity.
 - The gate is the product: pause → card → Approve/Reject/Edit → at-most-once
   apply → explicit ❌ on failure.
+- The morning brief is idempotent: it covers mail received since the previous
+  brief, keeps one task per email however often that mail is read again, and
+  never revives a task the owner finished. Timed tasks stand in the Schedule
+  next to calendar events, marked `(task)`.
 
 ## Calendar & Maps (Apple EventKit)
 
@@ -153,18 +159,22 @@ chat); internals stay ISO.
 ## Verify
 
 ```bash
-uv run pytest -q            # 73 tests: gate, bus, stores, adapters (fakes), gate
-                            # E2E, dedup, geocode args, preflight, retry loop
+uv run pytest -q            # 109 tests: gate, bus, stores, adapters (fakes), gate
+                            # E2E, dedup, geocode args, preflight, retry loop,
+                            # approval cards (multi-card resume, outcome footer,
+                            # supersede), brief (one task per email, schedule,
+                            # mail window)
 uv run lint-imports         # layer + channel-independence contracts (ADR-006)
 uv run ruff check .
 uv run python -m app.smoke  # prints the offline approval-gate proof
-RUN_LIVE=1 uv run pytest tests/eval -q   # agent evals on the configured model (14):
+RUN_LIVE=1 uv run pytest tests/eval -q   # agent evals on the configured model (15):
 #   triage judgment (OTP=low, invoice=urgent, meeting=needs_reply, persisted to
 #   email_triage), brief structure (sections, awaiting-reply, carry-over format,
 #   no invented times), rubric-judged readability, multi-turn session
 #   continuity, coordinator tool routing: task add, email through the gate,
-#   calendar create/edit/delete through the gate, slot proposal for
-#   underspecified moves. Nightly at 03:30 via launchd; Telegram alert on failure.
+#   calendar create/edit/delete through the gate, live calendar read for state
+#   questions, slot proposal for underspecified moves. Nightly at 03:30 via
+#   launchd; Telegram alert on failure.
 RUN_MAC=1 uv run pytest tests/integration/test_helper_live.py -q
 #   real EventKit probes through DayOrchestrator.app: TCC status, reads,
 #   create with alarm + structured location, series rename override,

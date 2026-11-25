@@ -14,6 +14,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import ClassVar
 
 from google.adk.apps import App, ResumabilityConfig
 from google.adk.runners import Runner
@@ -391,6 +392,30 @@ class Runtime:
             )
         return summary
 
+    OUTCOME_FOOTERS: ClassVar[dict[str, str]] = {
+        "email_sent": "✅ sent",
+        "calendar_event_created": "✅ created",
+        "calendar_event_updated": "✅ updated",
+        "calendar_event_deleted": "✅ deleted",
+        "send_failed": "❌ failed — it will NOT be retried automatically",
+        "send_refused": "not executed — the request was withdrawn",
+    }
+
+    def _outcome_footer(self, approval_id: str) -> str:
+        """Card footer once an approved run resumed: what the audit log says
+        happened, read after the effect — never an assumption."""
+        row = self.db.query_one(
+            "SELECT action FROM action_log WHERE approval_id=? AND action IN "
+            "('email_sent','calendar_event_created','calendar_event_updated',"
+            "'calendar_event_deleted','send_failed','send_refused') "
+            "ORDER BY seq DESC LIMIT 1",
+            (approval_id,),
+        )
+        if row is None:
+            return ("approved — NOT executed: the resumed run stopped before "
+                    "the effect. Ask again if you still need it.")
+        return self.OUTCOME_FOOTERS[row["action"]]
+
     async def _send_approval_card(self, row: approval.Approval) -> int:
         assert self.telegram is not None
         return await self.telegram.send_approval_card(row.id, self._render_card(row))
@@ -722,8 +747,9 @@ class Runtime:
                     log.exception("stale-card feedback failed")
             return
         confirmed = mapped == "approved"
+        resumed, reply = False, ""
         try:
-            resumed = await self.resume_for_approval(row, confirmed)
+            resumed, reply = await self.resume_for_approval(row, confirmed)
         except Exception:
             log.exception("resume failed for approval %s", row.id)
             actionlog.log(
@@ -742,13 +768,16 @@ class Runtime:
                     log.exception("resume-failure notify also failed")
             resumed = False
         if self.telegram is not None and row.telegram_message_id:
-            state = "approved — sending" if confirmed else "rejected"
             if not resumed:
-                state += (
-                    " — FAILED to resume; nothing was sent"
+                state = (
+                    "approved — sending — FAILED to resume; nothing was sent"
                     if confirmed
-                    else "\n(paused run not found; nothing was sent)"
+                    else "rejected\n(paused run not found; nothing was sent)"
                 )
+            elif confirmed:
+                state = self._outcome_footer(row.id)
+            else:
+                state = "rejected"
             try:
                 await self.telegram.edit_message_text(
                     row.telegram_message_id,
@@ -757,11 +786,26 @@ class Runtime:
                 )
             except Exception:
                 log.exception("failed to update approval card")
+        # The resumed turn is the coordinator answering with the tool result in
+        # hand; dropping that reply left the owner without a confirmation.
+        if resumed and reply and self.telegram is not None:
+            try:
+                await self.telegram.send_message(
+                    markdown_to_telegram_html(reply), "reminders"
+                )
+            except Exception:
+                log.exception("failed to deliver the reply for approval %s", row.id)
 
-    async def resume_for_approval(self, row: approval.Approval, confirmed: bool) -> bool:
-        """Resumes the paused run: FunctionResponse for adk_request_confirmation."""
+    async def resume_for_approval(
+        self, row: approval.Approval, confirmed: bool
+    ) -> tuple[bool, str]:
+        """Resumes the paused run: FunctionResponse for adk_request_confirmation.
+
+        Returns (resumed, final reply) — the reply is what the coordinator
+        said once the tool result was in.
+        """
         if not row.session_ref:
-            return False
+            return False, ""
         coords = json.loads(row.session_ref)
         user_id, session_id = coords["user_id"], coords["session_id"]
         session = await self.session_service.get_session(
@@ -769,13 +813,13 @@ class Runtime:
         )
         if session is None:
             log.error("approval %s: session %s not found", row.id, session_id)
-            return False
-        fc_id = self._find_pending_confirmation(session)
+            return False, ""
+        fc_id = self._find_pending_confirmation(session, row.id)
         if fc_id is None:
             log.error("approval %s: no pending confirmation in %s", row.id, session_id)
-            return False
+            return False, ""
         root = self._root_for_user(user_id)
-        await self._run_agent(
+        reply = await self._run_agent(
             root,
             user_id,
             session_id,
@@ -795,7 +839,7 @@ class Runtime:
                 ],
             ),
         )
-        return True
+        return True, reply
 
     # ---------- chat-side cancellation (ADR-004 amendment, 2026-11-23) ----------
 
@@ -838,9 +882,14 @@ class Runtime:
             log.exception("cancel resume failed for approval %s", row.id)
         if self.telegram is not None and row.telegram_message_id:
             try:
+                note = (
+                    "superseded — replaced by a newer request"
+                    if str(row.resolved_via or "").startswith("superseded:")
+                    else "cancelled — by owner in chat"
+                )
                 await self.telegram.edit_message_text(
                     row.telegram_message_id,
-                    f"{self._render_card(row)}\n[cancelled — by owner in chat]",
+                    f"{self._render_card(row)}\n[{note}]",
                     reply_markup=None,
                 )
             except Exception:
@@ -855,7 +904,12 @@ class Runtime:
             return pipelines.make_incoming_pipeline(self.deps, self.cfg, [])
         raise ValueError(f"no root agent mapping for user {user_id!r}")
 
-    def _find_pending_confirmation(self, session) -> str | None:
+    def _find_pending_confirmation(self, session, approval_id: str) -> str | None:
+        """The confirmation call bound to this approval that no resume answered.
+
+        Keyed by approval id, not by recency: one turn can raise several cards
+        and the owner answers them in any order.
+        """
         responded: set[str] = set()
         pending: str | None = None
         for ev in session.events or ():
@@ -867,7 +921,10 @@ class Runtime:
                 if fr is not None and fr.name == "adk_request_confirmation":
                     responded.add(fr.id or "")
                 fc = part.function_call
-                if fc is not None and fc.name == "adk_request_confirmation":
+                if fc is None or fc.name != "adk_request_confirmation":
+                    continue
+                bound = ((fc.args or {}).get("toolConfirmation") or {}).get("payload")
+                if str((bound or {}).get("approval_id") or "") == approval_id:
                     pending = fc.id
         return pending if pending and pending not in responded else None
 

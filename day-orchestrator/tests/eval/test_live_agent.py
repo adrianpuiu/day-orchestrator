@@ -15,6 +15,7 @@ import os
 import re
 import tempfile
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -33,10 +34,12 @@ pytestmark = pytest.mark.skipif(
 
 
 def make_email(uid: str, subject: str, snippet: str, from_: str = "a@b.com") -> dict:
+    # Received an hour ago: a brief covers mail since the previous brief.
+    received = datetime.now(UTC) - timedelta(hours=1)
     return {
         "uid": uid, "message_id": f"<{uid}@x>", "subject": subject,
         "from_": from_, "snippet": snippet,
-        "date": "2026-11-21T20:00:00+00:00",
+        "date": received.isoformat(),
     }
 
 
@@ -248,6 +251,42 @@ async def test_coordinator_delete_goes_through_gate(runtime: Runtime) -> None:
     assert rt.deps.calendar_writer.get_event_meta("ek-coffee") is None, (
         "approved delete must remove the event"
     )
+
+
+async def _tool_calls(rt: Runtime, name: str) -> int:
+    session = await rt.session_service.get_session(
+        app_name="app", user_id="tg:42", session_id="tg-42"
+    )
+    return sum(
+        1 for event in session.events for call in event.get_function_calls()
+        if call.name == name
+    )
+
+
+async def test_coordinator_reads_live_calendar_state(runtime: Runtime) -> None:
+    """2026-11-23: asked why new items were not in the calendar, the
+    coordinator answered from its own earlier messages and called the list
+    "confirmed". Calendar state is live: the turn must read it."""
+    rt = runtime
+    memory.set_value(rt.db, "paired_chat", 42)
+    rt.deps.calendar_writer.events.append({
+        "id": "ek-1", "title": "Vizionare apartament",
+        "start": "2026-11-23T23:00", "end": "2026-11-24T00:00",
+        "notes": "", "invitees": [], "alarm_minutes": 0, "location": "",
+    })
+    await rt.bus.publish(
+        Event(TELEGRAM_COMMAND, {"text": "add a task: buy milk",
+                                 "chat_id": 42, "message_id": 1})
+    )
+    reads = await _tool_calls(rt, "get_upcoming_events")
+    await rt.bus.publish(
+        Event(TELEGRAM_COMMAND, {"text": "ce am în calendar?",
+                                 "chat_id": 42, "message_id": 2})
+    )
+    assert await _tool_calls(rt, "get_upcoming_events") > reads, (
+        "a calendar question must be answered from a read in the same turn"
+    )
+    assert any("Vizionare apartament" in m for m in rt.telegram.messages)
 
 
 # --- brief readability: same local model judges against a fixed rubric --------

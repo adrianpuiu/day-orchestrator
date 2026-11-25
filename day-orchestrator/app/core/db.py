@@ -67,6 +67,10 @@ SCHEMA = [
         updated_at TEXT NOT NULL
     )
     """,
+    # One task per source email: re-running extraction on the same mail folds
+    # onto the existing row (open, done or dropped) instead of duplicating it.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source_ref ON tasks (source_ref) "
+    "WHERE source_ref IS NOT NULL",
     """
     CREATE TABLE IF NOT EXISTS reminders (
         id TEXT PRIMARY KEY,

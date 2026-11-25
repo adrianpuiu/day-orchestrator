@@ -83,3 +83,27 @@ a stale press on a closed card yields an "inactive card" reply, never an
 effect. Delete/edit cards are also fail-fast now: an event id that is not on
 the calendar never reaches the gate (root cause of the 2026-11-23 incident
 where an approved delete failed `not found` after the fact).
+
+## Amendment (2026-11-26, approval cards after the pause)
+
+Three defects on the resume path, from the 2026-11-22/23 session:
+
+- **Several cards in one turn.** A turn that raised N cards paused on N
+  confirmations, but the resume looked for "the last unanswered
+  confirmation". The owner approved four cards on 2026-11-22; one effect ran
+  and three rows stayed `approved` for good (`stderr.log`: `no pending
+  confirmation`). The lookup is now keyed by the approval id carried in each
+  confirmation call, so cards resume in whatever order the owner answers.
+  Chat-side cancellation of any pending card relies on the same lookup.
+- **Outcome on the card, reply in the chat.** After approval a card read
+  `approved — sending` permanently, and the coordinator's reply to the tool
+  result was dropped. The footer is now read from the audit log after the
+  effect (`✅ sent / created / updated / deleted`, `❌ failed`, `not
+  executed`), and the resumed reply is delivered like any other turn.
+- **`superseded` has a producer again.** A further move or delete of the same
+  event resolves every pending move/delete card for that event to
+  `superseded` (`resolved_via = superseded:<new id>`), audited as
+  `approval_superseded`; the runtime closes those cards and resumes their
+  paused runs as not-confirmed, exactly like a cancellation. As before, this
+  only revokes — it can prevent an effect, never cause one. Cards for other
+  events, and create cards, are never touched.

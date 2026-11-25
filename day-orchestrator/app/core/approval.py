@@ -20,7 +20,7 @@ from typing import Any
 from .db import Database
 
 TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"approved", "rejected", "cancelled"},
+    "pending": {"approved", "rejected", "cancelled", "superseded"},
 }
 
 
@@ -75,7 +75,7 @@ def create(
 
 
 def resolve(db: Database, approval_id: str, verdict: str, via: str) -> Approval:
-    if verdict not in {"approved", "rejected", "cancelled"}:
+    if verdict not in {"approved", "rejected", "cancelled", "superseded"}:
         raise ApprovalError(f"not a resolution verdict: {verdict!r}")
     row = db.query_one("SELECT * FROM approvals WHERE id=?", (approval_id,))
     if row is None:
@@ -122,6 +122,42 @@ def list_pending(db: Database) -> list[Approval]:
         "SELECT * FROM approvals WHERE state='pending' ORDER BY created_at"
     )
     return [_row_to_approval(r) for r in rows]
+
+
+_EVENT_REQUESTS = ("edit_calendar_event", "delete_calendar_event")
+
+
+def supersede_event_requests(
+    db: Database, kind: str, payload: dict[str, Any], replacement_id: str
+) -> list[Approval]:
+    """Resolves the pending cards a new request makes obsolete.
+
+    An event is in one place at a time: a further move, or a delete, replaces
+    every pending move/delete card for the same event (ADR-004 `superseded`).
+    Like cancellation this only revokes — it can prevent an effect, never
+    cause one. Returns the superseded rows, oldest first.
+    """
+    target = str(payload.get("event_id") or "")
+    if kind not in _EVENT_REQUESTS or not target:
+        return []
+    placeholders = ",".join("?" * len(_EVENT_REQUESTS))
+    stale: list[Approval] = []
+    for row in db.query(
+        "SELECT * FROM approvals WHERE state='pending' AND kind IN "
+        f"({placeholders}) ORDER BY created_at",
+        _EVENT_REQUESTS,
+    ):
+        if row["id"] == replacement_id:
+            continue
+        try:
+            replaces = json.loads(row["payload"]).get("event_id") == target
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if replaces:
+            stale.append(
+                resolve(db, row["id"], "superseded", f"superseded:{replacement_id}")
+            )
+    return stale
 
 
 def find_open_same(db: Database, kind: str, payload: dict[str, Any]) -> Approval | None:

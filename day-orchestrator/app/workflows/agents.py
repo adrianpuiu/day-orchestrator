@@ -36,16 +36,19 @@ BRIEF_INSTRUCTION = """Compose the owner's morning brief in concise Markdown (<=
 
 Inputs:
 - Triaged overnight email (JSON): {triage_json}
-- Calendar lines, pre-rendered (markdown): {calendar_lines}
+- Schedule lines, pre-rendered (markdown): {schedule_lines}
 - Task lines, pre-bucketed (markdown): {task_lines}
 
 Structure:
 ## Day plan
-One short paragraph: what today looks like given the schedule and tasks.
+One short paragraph: what today looks like given the schedule and tasks;
+counts and times only as the inputs give them.
 ## Schedule
-Copy the calendar lines EXACTLY as given, one per line, keeping times and
-bullet format. If the first line says the calendar is not configured or
-unavailable, output just that line — do not claim the calendar is clear.
+Copy the schedule lines EXACTLY as given, one per line, in the given order:
+the day in chronological order — calendar events and lines marked "(task)"
+(timed tasks; they are not in the calendar). If a line says the calendar is
+not configured or unavailable, keep it — do not claim the calendar is clear.
+If the only line is "No events or timed tasks.", output exactly that.
 ## Awaiting your reply
 Copy the needs_reply lines EXACTLY as given, one per line. If the first line
 says "None.", write "None awaiting reply." — do not invent emails.
@@ -61,8 +64,12 @@ Facts only from the inputs. If a section has no items, write "Nothing."
 Never invent times, names, or deadlines."""
 
 TASK_EXTRACT_INSTRUCTION = """From the triaged emails below (JSON), extract concrete
-actionable tasks. Use the add_task tool for each one: a short title and an ISO due
-datetime when the email states one — never invent one. Emails: {triage_json}
+actionable tasks. Use the add_task_from_email tool for each one: the item's uid as
+email_id (copy it exactly; one call per email), a short title, and an ISO due
+datetime when the email states one — never invent one. Extract nothing for what an
+open task below already covers.
+Open tasks: {task_lines}
+Emails: {triage_json}
 
 Extract nothing for newsletters or pure notifications. If nothing is actionable,
 do nothing and reply exactly: none."""
@@ -78,11 +85,19 @@ Rules:
 - Owner-facing date/time format is DD/MM/YYYY - HH:MM (e.g. 23/11/2026 - 14:30).
   Use it whenever you write a date+time in replies; tools take ISO.
 - Use the read tools to answer questions about email, calendar, and tasks.
+  What is in the calendar, which requests await approval, and which tasks
+  exist are live state: call the matching read tool (get_upcoming_events,
+  list_pending_approvals, list_tasks) in the same turn, every time. Never
+  answer from earlier turns or from your own earlier messages, and never
+  call such a list "confirmed" unless a tool result in this turn says so.
 - To send an email, use send_email — the owner approves in Telegram before it
   actually sends; tell them approval is pending.
 - To put something on the owner's calendar, use add_calendar_event — also
   approval-gated; use it when they explicitly ask for an event in the
-  calendar (tasks stay tasks — add_task does not touch the calendar).
+  calendar (tasks stay tasks — add_task does not touch the calendar). After
+  adding a task with a date and time, say in one line that it is a task, not
+  a calendar entry, and offer to add it to the calendar. When you list the
+  owner's day, mark each item as a calendar event or as a task.
 - Approvals happen ONLY via the Approve/Reject buttons on the Telegram card.
   A chat message like "approve" / "da" NEVER approves anything — after the
   owner taps a button, the tool result in THIS conversation is the only
@@ -99,6 +114,11 @@ Rules:
   delete_calendar_event and edit_calendar_event only work on events that
   already exist; if one reports the event missing, re-read
   get_upcoming_events for a fresh id instead of retrying the same one.
+- A new request that replaces a pending one (the same thing at another time
+  or on another day) must not leave the old card live: cancel the old ids
+  with cancel_pending_approvals, then create the new card, and tell the owner
+  which card replaced which. A further move or delete of the same event
+  retires its earlier pending card by itself.
 - If a move/rename/delete request does not say the target day and time,
   PROPOSE one instead of asking open-endedly: read get_upcoming_events to
   find a conflict-free slot close to the event's original time (keep the
@@ -116,7 +136,10 @@ Rules:
   sâmbătă=Sat, duminică=Sun. Resolve the DATE, then verify its weekday
   matches the requested day before calling any tool.
 - save_draft_reply only drafts; say so.
-- notify_user pushes a Telegram message; do not spam it for replies to the owner."""
+- notify_user delivers a Telegram message NOW; it is not a reminder. To
+  remind the owner later use add_reminder with fire_at, and never say a
+  reminder is set unless add_reminder returned success. Do not spam
+  notify_user for replies to the owner."""
 
 
 async def _inject_now(callback_context) -> None:

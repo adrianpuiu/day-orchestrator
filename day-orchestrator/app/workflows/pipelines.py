@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from google.adk.agents import BaseAgent, SequentialAgent
@@ -144,40 +145,128 @@ class AlertHigh(BaseAgent):
         yield Event(author=self.name)
 
 
-def _format_events(events: list[dict[str, Any]]) -> str:
-    """Renders calendar events as brief-ready markdown lines (local time)."""
-    from app.core.humanize import fmt_span
+class RefreshTaskLines(BaseAgent):
+    """W1, after task extraction: the brief lists the tasks as they are now —
+    including the ones this run just extracted from the overnight mail."""
 
-    lines: list[str] = []
+    deps: Any = None
+    cfg: Any = None
+
+    async def _run_async_impl(self, ctx: InvocationContext):
+        ctx.session.state["task_lines"] = tasks.as_brief_lines(
+            tasks.list_open_bucketed(self.deps.db, self.cfg.timezone)
+        )
+        yield Event(author=self.name)
+
+
+def _brief_window_start(db) -> datetime:
+    """A brief covers mail received since the previous brief went out (so a
+    quiet day or downtime never repeats or drops mail); without an earlier
+    brief, the last 24 hours."""
+    row = db.query_one(
+        "SELECT ts FROM action_log WHERE action='brief_sent' "
+        "ORDER BY seq DESC LIMIT 1"
+    )
+    if row is not None:
+        try:
+            start = datetime.fromisoformat(row["ts"])
+            return start if start.tzinfo else start.replace(tzinfo=UTC)
+        except ValueError:
+            pass
+    return datetime.now(UTC) - timedelta(hours=24)
+
+
+def _received_since(
+    emails: list[dict[str, Any]], start: datetime
+) -> list[dict[str, Any]]:
+    """Emails received at or after `start`. Undated mail cannot be placed in
+    a window and is left out."""
+    kept: list[dict[str, Any]] = []
+    for email in emails:
+        try:
+            received = datetime.fromisoformat(str(email.get("date") or ""))
+        except ValueError:
+            continue
+        if received.tzinfo is None:
+            received = received.replace(tzinfo=UTC)
+        if received >= start:
+            kept.append(email)
+    return kept
+
+
+def _local(value: Any) -> datetime:
+    """Local wall clock of an ISO datetime; a naive value is local time."""
+    return datetime.fromisoformat(str(value)).astimezone()
+
+
+def _timed(due: Any) -> datetime | None:
+    """Local datetime of a due value that names a time of day. Date-only dues
+    parse as midnight and are not schedule slots (the fmt_dt rule)."""
+    if not due:
+        return None
+    try:
+        moment = datetime.fromisoformat(str(due))
+    except ValueError:
+        return None
+    if moment.hour == moment.minute == 0:
+        return None
+    return moment.astimezone()
+
+
+def _schedule_lines(
+    events: list[dict[str, Any]],
+    buckets: dict[str, list[dict[str, Any]]],
+    notice: str = "",
+) -> str:
+    """The day in chronological order as brief-ready markdown lines: calendar
+    events plus the tasks that name a time today or tomorrow, marked
+    '(task)' — they are not in the calendar. A degraded-calendar `notice`
+    stays on the first line."""
+    from app.core.humanize import fmt_dt, fmt_span
+
+    unplaced = datetime.max.replace(tzinfo=UTC)  # all-day/undated sorts last
+    slots: list[tuple[datetime, str]] = []
     for event in events:
         try:
-            span = fmt_span(event["start"], event["end"])
+            span, start = fmt_span(event["start"], event["end"]), _local(event["start"])
         except (KeyError, TypeError, ValueError):
-            span = "all-day"
+            span, start = "all-day", unplaced
         line = f"- {span} {event.get('summary') or '(untitled)'}"
         if event.get("location"):
             line += f" · {event['location']}"
-        lines.append(line)
-    return "\n".join(lines) if lines else "No events."
+        slots.append((start, line))
+    for name in ("today", "tomorrow"):
+        for task in buckets.get(name, ()):
+            start = _timed(task.get("due"))
+            if start is not None:
+                slots.append(
+                    (start, f"- {fmt_dt(task['due'])} {task['title']} (task)")
+                )
+    slots.sort(key=lambda slot: slot[0])
+    lines = ([notice] if notice else []) + [line for _, line in slots]
+    if not slots and not notice:
+        lines.append("No events or timed tasks.")
+    return "\n".join(lines)
 
 
 def briefing_loader(deps: ToolDeps, cfg: Config) -> Callable[[], Awaitable[dict[str, str]]]:
     async def loader() -> dict[str, str]:
         emails = await asyncio.to_thread(deps.gmail.fetch_recent, cfg.max_overnight_emails)
+        emails = _received_since(emails, _brief_window_start(deps.db))
+        buckets = tasks.list_open_bucketed(deps.db, cfg.timezone)
+        events: list[dict[str, Any]] = []
+        notice = ""
         try:
             events = await asyncio.to_thread(deps.calendar.get_events, 2)
-            calendar_lines = _format_events(events)
         except CalendarNotConfigured:
-            calendar_lines = "Calendar not configured."
+            notice = "Calendar not configured."
         except Exception:
             log.warning("calendar unavailable; briefing degrades", exc_info=True)
-            calendar_lines = "Calendar temporarily unavailable."
+            notice = "Calendar temporarily unavailable."
         return {
             "overnight_emails": json.dumps(emails),
-            "calendar_lines": calendar_lines,
-            "task_lines": tasks.as_brief_lines(
-                tasks.list_open_bucketed(deps.db, cfg.timezone)
-            ),
+            "schedule_lines": _schedule_lines(events, buckets, notice),
+            "task_lines": tasks.as_brief_lines(buckets),
             "needs_reply_lines": _needs_reply_lines(deps.db),
         }
 
@@ -217,7 +306,8 @@ def make_briefing_pipeline(deps: ToolDeps, cfg: Config) -> SequentialAgent:
             LoadState(name="load_briefing_inputs", loader=briefing_loader(deps, cfg)),
             wf_agents.make_triage_agent(cfg),
             PersistTriage(name="persist_triage", deps=deps),
-            wf_agents.make_task_extractor(cfg, _tool_named(tools, "add_task")),
+            wf_agents.make_task_extractor(cfg, _tool_named(tools, "add_task_from_email")),
+            RefreshTaskLines(name="refresh_task_lines", deps=deps, cfg=cfg),
             wf_agents.make_planner_agent(cfg),
             PushText(name="push_briefing", deps=deps, cfg=cfg),
         ],
